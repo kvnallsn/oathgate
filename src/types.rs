@@ -1,12 +1,15 @@
 //! Virtio vhost types
 
-use std::{collections::VecDeque, fmt::Debug, os::fd::RawFd};
+use std::{collections::VecDeque, fmt::Debug, os::fd::RawFd, sync::Arc};
 
 use anyhow::Result;
 use bitflags::bitflags;
 use nix::sys::socket::ControlMessageOwned;
+use parking_lot::Mutex;
 
 use crate::{device::TryFromPayload, error::PayloadError};
+
+const VIRTIO_NET_HDR_SZ: usize = std::mem::size_of::<VirtioNetHeader>();
 
 #[macro_export]
 macro_rules! cast {
@@ -14,16 +17,43 @@ macro_rules! cast {
         u16::from_le_bytes([$b[0], $b[1]])
     };
 
+    (be16, $b:expr) => {
+        u16::from_be_bytes([$b[0], $b[1]])
+    };
+
     (u32, $b:expr) => {
         u32::from_le_bytes([$b[0], $b[1], $b[2], $b[3]])
+    };
+
+    (be32, $b:expr) => {
+        u32::from_be_bytes([$b[0], $b[1], $b[2], $b[3]])
     };
 
     (u64, $b:expr) => {
         u64::from_le_bytes([$b[0], $b[1], $b[2], $b[3], $b[4], $b[5], $b[6], $b[7]])
     };
+
+    (be64, $b:expr) => {
+        u64::from_be_bytes([$b[0], $b[1], $b[2], $b[3], $b[4], $b[5], $b[6], $b[7]])
+    };
+
+    (u128, $b:expr) => {
+        u128::from_le_bytes([
+            $b[0], $b[1], $b[2], $b[3], $b[4], $b[5], $b[6], $b[7], $b[8], $b[9], $b[10], $b[11],
+            $b[12], $b[13], $b[14], $b[15],
+        ])
+    };
+
+    (be128, $b:expr) => {
+        u128::from_be_bytes([
+            $b[0], $b[1], $b[2], $b[3], $b[4], $b[5], $b[6], $b[7], $b[8], $b[9], $b[10], $b[11],
+            $b[12], $b[13], $b[14], $b[15],
+        ])
+    };
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct VirtioFeatures: u64 {
         /// If this feature has been negotiated by driver, the device MUST issue a used buffer
         /// notification if the device runs out of available descriptors on a virtqueue
@@ -80,6 +110,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct VHostUserProtocolFeature: u64 {
         const MQ = 0x1;
         const LOG_SHMFD = 0x2;
@@ -105,6 +136,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct VqDescriptorEntryFlags: u16 {
         /// Marks a buffer as continuing via the next field
         const NEXT = 0x01;
@@ -118,6 +150,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct VirtioNetHeaderFlags: u8 {
         /// If the packet needs it's checksum computed
         const NEEDS_CSUM = 0x01;
@@ -129,6 +162,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct VirtioNetGso: u8 {
         const NONE = 0x00;
         const TCPV4 = 0x01;
@@ -138,6 +172,9 @@ bitflags! {
     }
 }
 
+pub type DeviceRxQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
+
+#[derive(Debug)]
 pub struct VirtioNetHeader {
     flags: VirtioNetHeaderFlags,
     gso_type: VirtioNetGso,
@@ -336,6 +373,61 @@ impl VHostHeader {
     }
 }
 
+impl VirtioNetHeader {
+    pub fn new() -> Self {
+        VirtioNetHeader {
+            flags: VirtioNetHeaderFlags::empty(),
+            gso_type: VirtioNetGso::NONE,
+            hdr_len: 0,
+            gso_size: 0,
+            csum_start: 0,
+            csum_offset: 0,
+            num_buffers: 1,
+        }
+    }
+
+    pub fn extract(mut pkt: Vec<u8>) -> Result<(Self, Vec<u8>), PayloadError> {
+        if pkt.len() < VIRTIO_NET_HDR_SZ {
+            return Err(PayloadError::NotEnoughData(pkt.len(), VIRTIO_NET_HDR_SZ));
+        }
+
+        let hdr = pkt.drain(..VIRTIO_NET_HDR_SZ).collect::<Vec<_>>();
+
+        let flags = hdr[0];
+        let gso_type = hdr[1];
+        let hdr_len = cast!(u16, hdr[2..4]);
+        let gso_size = cast!(u16, hdr[4..6]);
+        let csum_start = cast!(u16, hdr[6..8]);
+        let csum_offset = cast!(u16, hdr[8..10]);
+        let num_buffers = cast!(u16, hdr[10..12]);
+
+        let hdr = Self {
+            flags: VirtioNetHeaderFlags::from_bits(flags)
+                .unwrap_or_else(|| VirtioNetHeaderFlags::empty()),
+            gso_type: VirtioNetGso::from_bits(gso_type).unwrap_or_else(|| VirtioNetGso::empty()),
+            hdr_len,
+            gso_size,
+            csum_start,
+            csum_offset,
+            num_buffers,
+        };
+
+        Ok((hdr, pkt))
+    }
+
+    pub fn to_vec(self) -> Vec<u8> {
+        let mut data = Vec::with_capacity(std::mem::size_of_val(&self));
+        data.push(self.flags.bits());
+        data.push(self.gso_type.bits());
+        data.extend_from_slice(&self.hdr_len.to_le_bytes());
+        data.extend_from_slice(&self.gso_size.to_le_bytes());
+        data.extend_from_slice(&self.csum_start.to_le_bytes());
+        data.extend_from_slice(&self.csum_offset.to_le_bytes());
+        data.extend_from_slice(&self.num_buffers.to_le_bytes());
+        data
+    }
+}
+
 impl TryFromPayload for u64 {
     fn try_from_payload(pkt: &[u8]) -> Result<Self, PayloadError> {
         if pkt.len() < 8 {
@@ -458,4 +550,3 @@ impl Debug for MemoryRegionDescription {
         write!(f, "MemoryRegionDescription {{ guest_address: 0x{:08x}, size: 0x{:08x}, user_address: 0x{:08x}, mmap_offset: 0x{:08x} }}", self.guest_address, self.size, self.user_address, self.mmap_offset)
     }
 }
-

@@ -1,19 +1,17 @@
+mod poller;
+
 use std::{
     collections::{HashMap, VecDeque},
     fs::File,
     io::{IoSlice, IoSliceMut},
     num::NonZeroUsize,
-    os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
-    path::Path,
+    os::fd::{AsRawFd, FromRawFd, RawFd},
+    sync::Arc,
     usize,
 };
 
 use anyhow::Result;
-use mio::{
-    net::{UnixListener, UnixStream},
-    unix::SourceFd,
-    Events, Interest, Poll, Token,
-};
+use mio::{net::UnixStream, unix::SourceFd, Events, Interest, Poll, Token, Waker};
 use nix::{
     errno::Errno,
     sys::{
@@ -22,14 +20,21 @@ use nix::{
     },
     unistd,
 };
+use parking_lot::lock_api::Mutex;
 use vm_memory::{GuestAddress, GuestMemoryAtomic, GuestMemoryMmap, GuestRegionMmap, MmapRegion};
 
 use crate::{
-    error::{MemoryError, MessageError, PayloadError}, queue::VirtQueue, types::{
-        GuestMapping, MemoryRegionDescription, VHostHeader, VHostUserProtocolFeature, VRingAddr,
-        VRingDescriptor, VRingState, VirtioFeatures,
-    }
+    error::{MemoryError, MessageError, PayloadError},
+    queue::VirtQueue,
+    router::RouterHandle,
+    types::{
+        DeviceRxQueue, GuestMapping, MemoryRegionDescription, VHostHeader,
+        VHostUserProtocolFeature, VRingAddr, VRingDescriptor, VRingState, VirtioFeatures,
+    },
+    DeviceOpts,
 };
+
+pub use self::poller::EventPoller;
 
 const QUEUE_MAX_SIZE: u16 = 1024;
 
@@ -63,6 +68,9 @@ const VHOST_USER_BACKEND_CONFIG_CHANGE_MSG: u32 = 2;
 const VHOST_USER_FLAG_VERSION_1: u32 = 0x01;
 const VHOST_USER_FLAG_REPLY: u32 = 0x04;
 
+const TOKEN_STRM: Token = Token(0);
+const TOKEN_WAKE: Token = Token(1);
+
 /// Helper trait to convert from a slice of bytes into a vhost-user payload type
 pub trait TryFromPayload: Sized {
     /// Converts from a slice of bytes into a type, erroring if there is
@@ -73,55 +81,17 @@ pub trait TryFromPayload: Sized {
     fn try_from_payload(pkt: &[u8]) -> Result<Self, PayloadError>;
 }
 
-/// Wrapper around different types of FileDescriptors than can be registed
-/// with mio's poll instance
-pub enum Fd {
-    /// A unix stream, used by the vhost-user unix socket
-    UnixStream(UnixStream),
-
-    /// A transmit virtqueue's file descriptor and queue id
-    KickTxFd(RawFd, u32),
-
-    /// A receive virtqueue's file descriptor and queue id
-    KickRxFd(RawFd, u32),
-
-    /// A virtqueue's error file descriptor (do we need this?)
-    ErrFd(RawFd, u32),
-}
-
-impl Fd {
-    /// Returns a unique mio Token for each file descriptor type
-    pub fn as_token(&self) -> Token {
-        let fd = match self {
-            Self::UnixStream(strm) => strm.as_raw_fd(),
-            Self::KickTxFd(fd, _vring) => *fd,
-            Self::KickRxFd(fd, _vring) => *fd,
-            Self::ErrFd(fd, _vring) => *fd,
-        };
-
-        Token(fd as usize)
-    }
-}
-
-impl AsRawFd for Fd {
-    fn as_raw_fd(&self) -> RawFd {
-        match self {
-            Self::UnixStream(strm) => strm.as_raw_fd(),
-            Self::KickTxFd(fd, _vring) => *fd,
-            Self::KickRxFd(fd, _vring) => *fd,
-            Self::ErrFd(fd, _vring) => *fd,
-        }
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KickFd {
+    Rx(RawFd, usize),
+    Tx(RawFd, usize),
 }
 
 /// A TapDevice is the Virio device that will respond to the virtio-host-net driver
 /// running in the Qemu VM.
 pub struct TapDevice {
-    /// Handle to the mio poll (ake epoll) instance
+    /// Instance of mio poller
     poll: Poll,
-
-    /// Map of indentifies to their opened file descriptors
-    fds: HashMap<Token, Fd>,
 
     /// The backend request channel (used to send messages to the front end)
     channel: Option<File>,
@@ -137,6 +107,36 @@ pub struct TapDevice {
 
     /// Number of Tx/Rx virtqueue pairs
     num_queues: u64,
+
+    /// Mapping of tokens to kick file descriptors
+    kick_fds: HashMap<Token, KickFd>,
+
+    /// Port on the router this device is connected to
+    router_port: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct TapDeviceRxQueue {
+    queue: DeviceRxQueue,
+    waker: Arc<Waker>,
+}
+
+impl TapDeviceRxQueue {
+    /// Returns a handle to the underlying packet queue
+    pub fn queue(&self) -> DeviceRxQueue {
+        Arc::clone(&self.queue)
+    }
+
+    /// Puts a packet into the queue and notifies the device
+    ///
+    /// ### Arguments
+    /// * `pkt` - Packet to send to the device
+    pub fn enqueue(&self, pkt: Vec<u8>) {
+        let mut queue = self.queue.lock();
+        queue.push_back(pkt);
+        drop(queue);
+        self.waker.wake().ok();
+    }
 }
 
 impl TapDevice {
@@ -144,104 +144,103 @@ impl TapDevice {
     ///
     /// ### Arguments
     /// * `num_queues` - Number of trasmit/receive virtqueue pairs for thsi device
-    pub fn new(num_queues: usize) -> Result<Self> {
+    pub fn new(router: RouterHandle, opts: DeviceOpts) -> Result<Self> {
         let poll = Poll::new()?;
-        let fds = HashMap::new();
+        let waker = Waker::new(poll.registry(), TOKEN_WAKE)?;
+        let rx = TapDeviceRxQueue {
+            queue: Arc::new(Mutex::new(VecDeque::new())),
+            waker: Arc::new(waker),
+        };
 
         // for a net device, we need pairs of queues for transmit and received:
         // 0: receive0
         // 1: transmit0
-        let txrx_queues = num_queues * 2;
+        let txrx_queues: usize = (opts.device_queues * 2) as usize;
 
         let mut queues = Vec::with_capacity(txrx_queues);
         for _ in 0..txrx_queues {
-            queues.push(VirtQueue::new(QUEUE_MAX_SIZE)?);
+            queues.push(VirtQueue::new(QUEUE_MAX_SIZE, router.clone(), rx.queue())?);
         }
+
+        let router_port = router.connect(rx);
 
         Ok(Self {
             poll,
-            fds,
             channel: None,
             queues,
             mappings: Vec::new(),
             status: 0,
-            num_queues: num_queues as u64,
+            num_queues: opts.device_queues.into(),
+            kick_fds: HashMap::new(),
+            router_port,
         })
     }
 
-    pub fn run<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        let path = path.as_ref();
-        if path.exists() {
-            std::fs::remove_file(path)?;
-        }
+    pub fn spawn(mut self, strm: UnixStream) -> Result<()> {
+        std::thread::Builder::new()
+            .name(String::from("oathgate-device"))
+            .spawn(move || {
+                if let Err(error) = self.run(strm) {
+                    tracing::warn!(?error, "unable to run device thread");
+                }
+            })?;
+        Ok(())
+    }
 
-        let mut sock = UnixListener::bind(path)?;
-
+    pub fn run(&mut self, mut strm: UnixStream) -> Result<()> {
         self.poll
             .registry()
-            .register(&mut sock, Token(0), Interest::READABLE)?;
+            .register(&mut strm, TOKEN_STRM, Interest::READABLE)?;
 
-        tracing::info!(?path, "running unix domain server");
         let mut buffer = [0u8; 4096];
-        let mut events = Events::with_capacity(10);
-        while let Ok(_) = self.poll.poll(&mut events, None) {
+        let mut events = Events::with_capacity(1024);
+        loop {
+            self.poll.poll(&mut events, None)?;
+
             for event in &events {
                 match event.token() {
-                    Token(0) => {
-                        let (mut strm, peer) = sock.accept()?;
-                        let token = Token(strm.as_raw_fd().try_into()?);
-                        tracing::debug!(?peer, ?token, "accepted unix connection");
-
-                        self.poll
-                            .registry()
-                            .register(&mut strm, token, Interest::READABLE)?;
-                        self.fds.insert(token, Fd::UnixStream(strm));
-                    }
-                    token => match self.fds.get(&token) {
-                        Some(Fd::UnixStream(strm)) => {
-                            let raw_fd = strm.as_raw_fd();
-                            'read_stream: loop {
-                                match self.read_stream(raw_fd) {
-                                    Ok(_) => { /* do nothing */ }
-                                    Err(MessageError::Errno(Errno::EWOULDBLOCK)) => {
-                                        // no more data, stop the loop but don't error
-                                        break 'read_stream;
-                                    }
-                                    Err(err) => Err(err)?,
+                    TOKEN_STRM => {
+                        let raw_fd = strm.as_raw_fd();
+                        'read: loop {
+                            match self.read_stream(raw_fd) {
+                                Ok(_) => { /* success, do nothing */ }
+                                Err(MessageError::Errno(Errno::EWOULDBLOCK)) => {
+                                    // no more data, stop the loop
+                                    break 'read;
                                 }
+                                Err(e) => Err(e)?,
                             }
                         }
-                        Some(Fd::KickTxFd(fd, vring)) => {
+                    }
+                    TOKEN_WAKE => {
+                        let vq = self.get_virtqueue_mut(0)?;
+                        vq.handle_rx_queued()?;
+                    }
+                    token => match self.kick_fds.get(&token) {
+                        Some(KickFd::Rx(fd, vq)) => {
                             let sz = unistd::read(*fd, &mut buffer)?;
                             let pkt = &buffer[..sz];
-                            tracing::debug!(sz, "[vring][{vring:02x}] read from driver (avail)");
-                            tracing::debug!("[vring][{vring:02x}] data: {pkt:x?}");
+                            tracing::debug!(sz, "[vq][{vq:02x}] read from driver (rx)");
+                            tracing::trace!("[vq][{vq:02x}] data: {pkt:x?}");
 
-                            let vring = self.get_virtqueue_mut(*vring as usize)?;
-                            vring.kick_tx(&pkt)?;
+                            let vq = self.get_virtqueue_mut(*vq)?;
+                            vq.kick_rx(&pkt)?;
                         }
-                        Some(Fd::KickRxFd(fd, vring)) => {
+                        Some(KickFd::Tx(fd, vq)) => {
                             let sz = unistd::read(*fd, &mut buffer)?;
                             let pkt = &buffer[..sz];
-                            tracing::debug!(sz, "[vring][{vring:02x}] read from driver (avail)");
-                            tracing::debug!("[vring][{vring:02x}] data: {pkt:x?}");
-                        }
-                        Some(Fd::ErrFd(fd, vring)) => {
-                            let sz = unistd::read(*fd, &mut buffer)?;
-                            let pkt = &buffer[..sz];
-                            tracing::warn!(sz, "[vring][{:02x}] error", vring);
+                            tracing::debug!(sz, "[vq][{vq:02x}] read from driver (tx)");
+                            tracing::trace!("[vq][{vq:02x}] data: {pkt:x?}");
 
-                            let vring = self.get_virtqueue(*vring as usize)?;
-                            vring.err(&pkt);
+                            let port = self.router_port;
+                            let vq = self.get_virtqueue_mut(*vq)?;
+                            vq.kick_tx(&pkt, port)?;
                         }
-                        //Some(Fd::RawFd(fd, queue)) => self.read_raw(*fd, *queue, &mut buffer)?,
-                        None => tracing::debug!(?token, "unknown mio token"),
+                        None => tracing::debug!(?token, "[device] unknown mio token"),
                     },
                 }
             }
         }
-
-        Ok(())
     }
 
     fn read_stream(&mut self, strm: RawFd) -> Result<(), MessageError> {
@@ -282,22 +281,6 @@ impl TapDevice {
 
         self.parse_msg(strm, hdr)?;
 
-        Ok(())
-    }
-
-    fn unregister_fd(&mut self, fd: RawFd) -> Result<(), MessageError> {
-        let token = Token(fd as usize);
-        self.poll.registry().deregister(&mut SourceFd(&fd))?;
-        self.fds.remove(&token);
-        Ok(())
-    }
-
-    fn register_fd(&mut self, fd: Fd) -> Result<(), MessageError> {
-        let token = fd.as_token();
-        self.poll
-            .registry()
-            .register(&mut SourceFd(&fd.as_raw_fd()), token, Interest::READABLE)?;
-        self.fds.insert(token, fd);
         Ok(())
     }
 
@@ -445,8 +428,6 @@ impl TapDevice {
 
                 let vring = self.get_virtqueue_mut(vring_idx as usize)?;
                 vring.set_call_fd(fd);
-
-                //self.register_fd(Fd::CallFd(fd, vring_idx as u32))?;
             }
             VHOST_USER_SET_VRING_ERR => {
                 // Request Type: u64
@@ -467,8 +448,6 @@ impl TapDevice {
 
                 let vring = self.get_virtqueue_mut(vring_idx as usize)?;
                 vring.set_error_fd(fd);
-
-                self.register_fd(Fd::ErrFd(fd, vring_idx as u32))?;
             }
             VHOST_USER_SET_STATUS => {
                 // Request Type: u64
@@ -606,7 +585,7 @@ impl TapDevice {
                 let state: VRingState = hdr.payload()?;
                 tracing::debug!("[vring][{:02x}] stopping", state.index);
 
-                let ((kick, call, err), next) = {
+                let ((kick, _call, _err), next) = {
                     let vq = self.get_virtqueue_mut(state.index as usize)?;
                     vq.set_not_ready();
                     let fds = vq.clear_fds();
@@ -615,15 +594,7 @@ impl TapDevice {
                 };
 
                 if let Some(fd) = kick {
-                    self.unregister_fd(fd)?;
-                }
-
-                if let Some(file) = call {
-                    self.unregister_fd(file.into_raw_fd())?;
-                }
-
-                if let Some(fd) = err {
-                    self.unregister_fd(fd)?;
+                    self.poll.registry().deregister(&mut SourceFd(&fd))?;
                 }
 
                 let resp = VRingDescriptor {
@@ -652,10 +623,16 @@ impl TapDevice {
                 let vring = self.get_virtqueue_mut(vring_idx as usize)?;
                 vring.set_kick_fd(fd);
 
-                match vring_idx & 1 == 0 {
-                    true => self.register_fd(Fd::KickRxFd(fd, vring_idx as u32))?,
-                    false => self.register_fd(Fd::KickTxFd(fd, vring_idx as u32))?,
-                }
+                let token = Token(fd.as_raw_fd() as usize);
+                self.poll
+                    .registry()
+                    .register(&mut SourceFd(&fd), token, Interest::READABLE)?;
+
+                let fd = match vring_idx & 1 == 0 {
+                    true => KickFd::Rx(fd, vring_idx as usize),
+                    false => KickFd::Tx(fd, vring_idx as usize),
+                };
+                self.kick_fds.insert(token, fd);
             }
             VHOST_USER_SET_MEM_TABLE => {
                 // Request Type: Multiple Memory Region Descriptions
@@ -822,14 +799,6 @@ impl TapDevice {
             .iter()
             .find_map(|m| m.guest_addr(vmm))
             .ok_or(MemoryError::NoHostToGuestMappingFound(vmm))
-    }
-
-    /// Returns a (read-only) reference to a virtqueue
-    ///
-    /// ### Arguments
-    /// * `idx` - Reference to a virtqueue at the specified index
-    fn get_virtqueue(&self, idx: usize) -> Result<&VirtQueue, MessageError> {
-        self.queues.get(idx).ok_or(MessageError::QueueNotFound(idx))
     }
 
     /// Returns a (mutable) reference to a virtqueue

@@ -32,6 +32,30 @@ pub enum MemoryError {
 }
 
 #[derive(thiserror::Error, Debug)]
+pub enum ProtocolError {
+    #[error("not enough data for payload, got = {0}, expected = {1}")]
+    NotEnoughData(usize, usize),
+
+    #[error("malformed packet: {0}")]
+    MalformedPacket(String),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum QueueError {
+    #[error("queue is disabled")]
+    Disabled,
+
+    #[error("memory: {0}")]
+    Memory(#[from] MemoryError),
+
+    #[error("virtio: {0}")]
+    Virtio(#[from] virtio_queue::Error),
+
+    #[error("i/o: {0}")]
+    IO(#[from] std::io::Error),
+}
+
+#[derive(thiserror::Error, Debug)]
 pub enum MessageError {
     #[error("error: {0}")]
     Errno(#[from] Errno),
@@ -62,4 +86,22 @@ pub enum MessageError {
 
     #[error("queue not found, index = {0}")]
     QueueNotFound(usize),
+
+    #[error("queue is disabled")]
+    QueueDisabled,
+
+    #[error("no receivers available")]
+    ChannelClosed,
+
+    #[error("virtio: {0}")]
+    Virtio(#[from] virtio_queue::Error),
+
+    #[error("protocol failed: {0}")]
+    Protocol(#[from] ProtocolError),
+}
+
+impl<T> From<flume::SendError<T>> for MessageError {
+    fn from(_value: flume::SendError<T>) -> Self {
+        Self::ChannelClosed
+    }
 }
