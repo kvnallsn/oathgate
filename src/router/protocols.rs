@@ -99,7 +99,7 @@ impl MacAddress {
 pub struct EthernetFrame {
     pub dst: MacAddress,
     pub src: MacAddress,
-    pub ethertype: EtherType
+    pub ethertype: EtherType,
 }
 
 impl EthernetFrame {
@@ -113,11 +113,19 @@ impl EthernetFrame {
         let src = MacAddress::parse(&hdr[6..12])?;
         let ethertype = EtherType::try_from(&hdr[12..14])?;
 
-        Ok(Self { dst, src, ethertype })
+        Ok(Self {
+            dst,
+            src,
+            ethertype,
+        })
     }
 
     pub fn as_reply(&self) -> Self {
-        Self { dst: self.src, src: self.dst, ethertype: self.ethertype }
+        Self {
+            dst: self.src,
+            src: self.dst,
+            ethertype: self.ethertype,
+        }
     }
 
     pub fn to_vec(self, data: &[u8]) -> Vec<u8> {
@@ -139,7 +147,7 @@ pub struct Ipv4Header {
     pub protocol: u8,
     pub checksum: u16,
     pub src: Ipv4Addr,
-    pub dst: Ipv4Addr
+    pub dst: Ipv4Addr,
 }
 
 impl Ipv4Header {
@@ -175,7 +183,17 @@ impl Ipv4Header {
         let src = Ipv4Addr::from(cast!(be32, hdr[12..16]));
         let dst = Ipv4Addr::from(cast!(be32, hdr[16..20]));
 
-        Ok(Self { version, id, flags, frag_offset, ttl, protocol, checksum, src, dst })
+        Ok(Self {
+            version,
+            id,
+            flags,
+            frag_offset,
+            ttl,
+            protocol,
+            checksum,
+            src,
+            dst,
+        })
     }
 
     pub fn as_reply(&self) -> Self {

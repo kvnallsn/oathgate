@@ -1,7 +1,13 @@
 //! Simple Router
 
 use std::{
-    borrow::Cow, collections::HashMap, fs::File, net::{IpAddr, Ipv4Addr}, path::PathBuf, sync::Arc, time::UNIX_EPOCH
+    borrow::Cow,
+    collections::HashMap,
+    fs::File,
+    net::{IpAddr, Ipv4Addr},
+    path::PathBuf,
+    sync::Arc,
+    time::UNIX_EPOCH,
 };
 
 use flume::Sender;
@@ -64,22 +70,24 @@ impl Router {
         let devices = Arc::clone(&self.devices);
         let handle = RouterHandle { tx, devices };
 
-        std::thread::Builder::new().name(String::from("router")).spawn(move || {
-            loop {
-                match rx.recv() {
-                    Ok(RouterMsg::Packet(port, pkt)) => match self.route(port, pkt) {
-                        Ok(_) => tracing::trace!("routed packet"),
-                        Err(error) => tracing::warn!(?error, "unable to route packet"),
-                    },
-                    Err(error) => {
-                        tracing::error!(?error, "router channel closed");
-                        break;
+        std::thread::Builder::new()
+            .name(String::from("router"))
+            .spawn(move || {
+                loop {
+                    match rx.recv() {
+                        Ok(RouterMsg::Packet(port, pkt)) => match self.route(port, pkt) {
+                            Ok(_) => tracing::trace!("routed packet"),
+                            Err(error) => tracing::warn!(?error, "unable to route packet"),
+                        },
+                        Err(error) => {
+                            tracing::error!(?error, "router channel closed");
+                            break;
+                        }
                     }
                 }
-            }
 
-            tracing::debug!("router thread died");
-        })?;
+                tracing::debug!("router thread died");
+            })?;
         Ok(handle)
     }
 
@@ -237,7 +245,7 @@ impl RouterHandle {
         let mut devices = self.devices.lock();
         let idx = devices.len();
         devices.push(queue);
-        
+
         idx
     }
 }

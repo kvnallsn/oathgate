@@ -1,7 +1,10 @@
 //! VirtQueue implementation
 
 use std::{
-    fs::File, io::{Read, Write}, ops::Deref, os::fd::{FromRawFd, RawFd}
+    fs::File,
+    io::{Read, Write},
+    ops::Deref,
+    os::fd::{FromRawFd, RawFd},
 };
 
 use anyhow::Result;
@@ -9,7 +12,11 @@ use nix::unistd;
 use virtio_queue::{Queue, QueueOwnedT, QueueT};
 use vm_memory::{GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap};
 
-use crate::{error::{MemoryError, MessageError}, router::RouterHandle, types::{DeviceRxQueue, VirtioNetHeader}};
+use crate::{
+    error::{MemoryError, MessageError},
+    router::RouterHandle,
+    types::{DeviceRxQueue, VirtioNetHeader},
+};
 
 #[derive(Debug)]
 pub struct VirtQueue {
@@ -220,7 +227,6 @@ impl VirtQueue {
             None => return Err(MemoryError::NoMappedMemory)?,
             Some(mem) => mem,
         };
-
 
         loop {
             if pending.is_empty() {

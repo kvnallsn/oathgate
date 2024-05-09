@@ -65,7 +65,6 @@ fn main() {
         .with_max_level(level)
         .init();
 
-
     if let Err(error) = run(opts) {
         tracing::error!(?error, "unable to run oathgate-vost");
     }
