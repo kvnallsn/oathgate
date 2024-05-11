@@ -42,7 +42,6 @@ impl EventPoller {
                 let token = event.token();
                 match token {
                     token if token == listener_token => {
-                        // TODO: spawn a new device
                         let (strm, peer) = listener.accept()?;
                         tracing::debug!(?peer, "accepted unix connection");
 

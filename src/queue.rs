@@ -189,9 +189,9 @@ impl VirtQueue {
 
             let (hdr, pkt) = VirtioNetHeader::extract(pkt)?;
             let len = pkt.len();
-            tracing::debug!(?idx, "[kick_tx] read {} bytes", len);
-            tracing::trace!(?idx, "[kick_tx] header: {hdr:02x?}");
-            tracing::trace!(?idx, "[kick_tx] data: {pkt:02x?}");
+            tracing::trace!(?idx, "[kick-tx] read {} bytes", len);
+            tracing::trace!(?idx, "[kick-tx] header: {hdr:02x?}");
+            tracing::trace!(?idx, "[kick-tx] data: {pkt:02x?}");
 
             self.router.route(router_port, pkt);
 
@@ -255,7 +255,7 @@ impl VirtQueue {
             data.append(&mut pkt);
 
             let head_idx = chain.head_index();
-            tracing::debug!("writing to descriptor chain: {}", head_idx);
+            tracing::trace!("writing to descriptor chain: {}", head_idx);
             tracing::trace!("packet: {:02x?}", data);
             let mut writer = chain.writer(mem.deref())?;
             writer.write_all(&data)?;

@@ -220,7 +220,7 @@ impl TapDevice {
                         Some(KickFd::Rx(fd, vq)) => {
                             let sz = unistd::read(*fd, &mut buffer)?;
                             let pkt = &buffer[..sz];
-                            tracing::debug!(sz, "[vq][{vq:02x}] read from driver (rx)");
+                            tracing::trace!(sz, "[vq][{vq:02x}] read from driver (rx)");
                             tracing::trace!("[vq][{vq:02x}] data: {pkt:x?}");
 
                             let vq = self.get_virtqueue_mut(*vq)?;
@@ -229,7 +229,7 @@ impl TapDevice {
                         Some(KickFd::Tx(fd, vq)) => {
                             let sz = unistd::read(*fd, &mut buffer)?;
                             let pkt = &buffer[..sz];
-                            tracing::debug!(sz, "[vq][{vq:02x}] read from driver (tx)");
+                            tracing::trace!(sz, "[vq][{vq:02x}] read from driver (tx)");
                             tracing::trace!("[vq][{vq:02x}] data: {pkt:x?}");
 
                             let port = self.router_port;

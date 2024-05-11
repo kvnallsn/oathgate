@@ -41,10 +41,9 @@ fn run(opts: Opts) -> Result<()> {
     let mut poller = EventPoller::new(opts.socket)?;
 
     let ip4 = Ipv4Addr::from([10, 10, 10, 1]);
-    let router = Router::new(ip4, opts.pcap);
 
     // spawn thread to receive messages/packets
-    let router = router.start()?;
+    let router = Router::new(ip4, opts.pcap)?;
 
     poller.run(opts.device, router)?;
 

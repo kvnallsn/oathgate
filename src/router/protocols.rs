@@ -11,6 +11,10 @@ use crate::{cast, error::ProtocolError};
 
 use super::checksum;
 
+const ETHERNET_FRAME_SIZE: usize = 14;
+const ARP4_PKT_SIZE: usize = 28;
+const ARP6_PKT_SIZE: usize = 52;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EtherType {
     IPv4 = 0x0800,
@@ -95,7 +99,7 @@ impl MacAddress {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct EthernetFrame {
     pub dst: MacAddress,
     pub src: MacAddress,
@@ -103,6 +107,20 @@ pub struct EthernetFrame {
 }
 
 impl EthernetFrame {
+    /// Creates a new EthernetFrame
+    pub fn new(src: MacAddress, dst: MacAddress, ethertype: EtherType) -> Self {
+        Self {
+            dst,
+            src,
+            ethertype,
+        }
+    }
+
+    /// Extracts an EthernetFrame from a packet received over the wire.
+    /// Returns an error if not enough data is provided to build an EthernetFrame.
+    ///
+    /// ### Arguments
+    /// * `pkt` - Bytes to extract etherframe from from
     pub fn extract(pkt: &mut Vec<u8>) -> Result<Self, ProtocolError> {
         if pkt.len() < 14 {
             return Err(ProtocolError::NotEnoughData(pkt.len(), 14));
@@ -120,12 +138,22 @@ impl EthernetFrame {
         })
     }
 
+    pub fn size() -> usize {
+        ETHERNET_FRAME_SIZE
+    }
+
     pub fn as_reply(&self) -> Self {
         Self {
             dst: self.src,
             src: self.dst,
             ethertype: self.ethertype,
         }
+    }
+
+    pub fn as_bytes(&self, pkt: &mut [u8]) {
+        pkt[0..6].copy_from_slice(&self.dst.as_bytes());
+        pkt[6..12].copy_from_slice(&self.src.as_bytes());
+        pkt[12..14].copy_from_slice(&self.ethertype.as_u16().to_be_bytes());
     }
 
     pub fn to_vec(self, data: &[u8]) -> Vec<u8> {
@@ -140,6 +168,7 @@ impl EthernetFrame {
 
 pub struct Ipv4Header {
     pub version: u8,
+    pub length: u16,
     pub id: u16,
     pub flags: u8,
     pub frag_offset: u16,
@@ -151,11 +180,12 @@ pub struct Ipv4Header {
 }
 
 impl Ipv4Header {
-    pub fn new(src: Ipv4Addr, dst: Ipv4Addr, protocol: u8) -> Self {
+    pub fn new(src: Ipv4Addr, dst: Ipv4Addr, protocol: u8, length: u16) -> Self {
         let mut rng = rand::thread_rng();
 
         Self {
             version: 4,
+            length: length + 20,
             id: rng.gen(),
             flags: 2, // don't fragment
             frag_offset: 0,
@@ -174,6 +204,7 @@ impl Ipv4Header {
 
         let hdr = pkt.drain(0..20).collect::<Vec<_>>();
         let version = hdr[0] >> 4;
+        let length = cast!(be16, hdr[2..4]);
         let id = cast!(be16, hdr[4..6]);
         let flags = hdr[6] >> 5;
         let frag_offset = cast!(be16, hdr[6..8]) & 0x1FFF;
@@ -185,6 +216,7 @@ impl Ipv4Header {
 
         Ok(Self {
             version,
+            length,
             id,
             flags,
             frag_offset,
@@ -196,8 +228,28 @@ impl Ipv4Header {
         })
     }
 
-    pub fn as_reply(&self) -> Self {
-        Ipv4Header::new(self.dst, self.src, self.protocol)
+    pub fn as_reply(&self, payload: &[u8]) -> Self {
+        Ipv4Header::new(self.dst, self.src, self.protocol, payload.len() as u16)
+    }
+
+    /// Returns this header as a byte slice / array.
+    ///
+    /// This does not append the payload but the length field and checksum
+    /// are calcuated from the payload length
+    pub fn as_bytes(&self, rpkt: &mut [u8]) {
+        let flags_frag = ((self.flags as u16) << 13) | self.frag_offset;
+
+        rpkt[0] = (self.version << 4) | 5; // Generally 0x45
+        rpkt[2..4].copy_from_slice(&self.length.to_be_bytes());
+        rpkt[4..6].copy_from_slice(&self.id.to_be_bytes());
+        rpkt[6..8].copy_from_slice(&flags_frag.to_be_bytes());
+        rpkt[8] = self.ttl;
+        rpkt[9] = self.protocol;
+        rpkt[12..16].copy_from_slice(&self.src.octets());
+        rpkt[16..20].copy_from_slice(&self.dst.octets());
+
+        let csum = checksum(&rpkt[0..20]);
+        rpkt[10..12].copy_from_slice(&csum.to_be_bytes());
     }
 
     pub fn to_vec(self, data: &[u8]) -> Vec<u8> {
@@ -357,8 +409,36 @@ impl ArpPacket {
         self.operation = 2;
     }
 
-    pub fn len(&self) -> usize {
-        std::mem::size_of_val(self)
+    pub fn size(&self) -> usize {
+        match (self.spa, self.tpa) {
+            (IpAddr::V4(_), IpAddr::V4(_)) => ARP4_PKT_SIZE,
+            (IpAddr::V6(_), IpAddr::V6(_)) => ARP6_PKT_SIZE,
+            _ => 0,
+        }
+    }
+
+    pub fn as_bytes(&self, pkt: &mut [u8]) {
+        // FIX: This should probably return an error if ip4/ip6 mismatch
+
+        pkt[0..2].copy_from_slice(&self.hardware_type.to_be_bytes());
+        pkt[2..4].copy_from_slice(&self.protocol_type.as_u16().to_be_bytes());
+        pkt[4] = self.hardware_len;
+        pkt[5] = self.protocol_len;
+        pkt[6..8].copy_from_slice(&self.operation.to_be_bytes());
+        pkt[8..14].copy_from_slice(&self.sha.as_bytes());
+        match (self.spa, self.tpa) {
+            (IpAddr::V4(spa), IpAddr::V4(tpa)) => {
+                pkt[14..18].copy_from_slice(spa.octets().as_slice());
+                pkt[18..24].copy_from_slice(&self.tha.as_bytes());
+                pkt[24..28].copy_from_slice(tpa.octets().as_slice());
+            }
+            (IpAddr::V6(spa), IpAddr::V6(tpa)) => {
+                pkt[14..30].copy_from_slice(spa.octets().as_slice());
+                pkt[30..36].copy_from_slice(&self.tha.as_bytes());
+                pkt[36..52].copy_from_slice(tpa.octets().as_slice());
+            }
+            _ => tracing::warn!("mismatched ip4/ip6 in arp packet"),
+        }
     }
 
     pub fn to_bytes(self) -> Vec<u8> {

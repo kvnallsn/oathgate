@@ -10,14 +10,18 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use flume::Sender;
+use flume::{Receiver, Sender};
 use parking_lot::Mutex;
 use pcap_file::pcap::{PcapPacket, PcapWriter};
 
 use crate::{device::TapDeviceRxQueue, error::ProtocolError};
 
-use self::protocols::{ArpPacket, EtherType, EthernetFrame, Ipv4Header, MacAddress};
+use self::{
+    local::LocalDevice,
+    protocols::{ArpPacket, EtherType, EthernetFrame, Ipv4Header, MacAddress},
+};
 
+mod local;
 mod protocols;
 
 const ETHERNET_HDR_SZ: usize = 14;
@@ -26,12 +30,18 @@ pub enum RouterMsg {
     Packet(usize, Vec<u8>),
 }
 
+pub enum RouterAction {
+    Respond(Vec<u8>),
+    Forward(Vec<u8>),
+    Drop(Vec<u8>),
+}
+
 pub struct Router {
     ip4: Ipv4Addr,
-    mac: MacAddress,
     pcap: Option<PcapWriter<File>>,
     devices: Arc<Mutex<Vec<TapDeviceRxQueue>>>,
     ports: HashMap<MacAddress, usize>,
+    local: LocalDevice,
 }
 
 #[derive(Clone, Debug)]
@@ -41,7 +51,7 @@ pub struct RouterHandle {
 }
 
 impl Router {
-    pub fn new(ip4: Ipv4Addr, pcap: Option<PathBuf>) -> Self {
+    pub fn new(ip4: Ipv4Addr, pcap: Option<PathBuf>) -> std::io::Result<RouterHandle> {
         let pcap_writer = match pcap.as_ref() {
             None => None,
             Some(f) => {
@@ -56,39 +66,45 @@ impl Router {
             }
         };
 
-        Router {
-            ip4,
-            mac: MacAddress::generate(),
-            pcap: pcap_writer,
-            devices: Arc::new(Mutex::new(Vec::new())),
-            ports: HashMap::new(),
-        }
-    }
-
-    pub fn start(mut self) -> Result<RouterHandle, std::io::Error> {
         let (tx, rx) = flume::unbounded();
-        let devices = Arc::clone(&self.devices);
-        let handle = RouterHandle { tx, devices };
+        let devices = Arc::new(Mutex::new(Vec::new()));
+        let handle = RouterHandle {
+            tx,
+            devices: Arc::clone(&devices),
+        };
+
+        let local = LocalDevice::new(ip4);
+
+        let router = Router {
+            ip4,
+            pcap: pcap_writer,
+            devices,
+            ports: HashMap::new(),
+            local,
+        };
 
         std::thread::Builder::new()
             .name(String::from("router"))
-            .spawn(move || {
-                loop {
-                    match rx.recv() {
-                        Ok(RouterMsg::Packet(port, pkt)) => match self.route(port, pkt) {
-                            Ok(_) => tracing::trace!("routed packet"),
-                            Err(error) => tracing::warn!(?error, "unable to route packet"),
-                        },
-                        Err(error) => {
-                            tracing::error!(?error, "router channel closed");
-                            break;
-                        }
-                    }
-                }
+            .spawn(move || router.run(rx))?;
 
-                tracing::debug!("router thread died");
-            })?;
         Ok(handle)
+    }
+
+    fn run(mut self, rx: Receiver<RouterMsg>) {
+        loop {
+            match rx.recv() {
+                Ok(RouterMsg::Packet(port, pkt)) => match self.route(port, pkt) {
+                    Ok(_) => tracing::trace!("routed packet"),
+                    Err(error) => tracing::warn!(?error, "unable to route packet"),
+                },
+                Err(error) => {
+                    tracing::error!(?error, "router channel closed");
+                    break;
+                }
+            }
+        }
+
+        tracing::debug!("router thread died");
     }
 
     pub fn log_packet(&mut self, pkt: &[u8]) {
@@ -120,83 +136,56 @@ impl Router {
         let ef = EthernetFrame::extract(&mut pkt)?;
 
         // associate MAC address of source with port
-        tracing::debug!(mac = ?ef.src, port, "associating mac with router port");
-        self.ports.insert(ef.src, port);
+        match self.ports.insert(ef.src, port) {
+            Some(old_port) if port == old_port => { /* do nothing, no port change */ }
+            Some(old_port) => {
+                tracing::debug!(port, old_port, ?ef.src, "associating mac with new port")
+            }
+            None => tracing::debug!(mac = ?ef.src, port, "associating mac with router port"),
+        }
 
-        match ef.ethertype {
-            EtherType::ARP => self.route_arp(pkt),
+        let action = match ef.ethertype {
+            EtherType::ARP => self.handle_arp(pkt),
             EtherType::IPv4 => self.route_ip4(ef, pkt),
             EtherType::IPv6 => self.route_ip6(pkt),
         }?;
 
+        match action {
+            RouterAction::Respond(pkt) => self.to_device(pkt),
+            RouterAction::Forward(_pkt) => tracing::debug!("[router] forwarding packet upstream"),
+            RouterAction::Drop(_pkt) => tracing::debug!("[router] dropping packet"),
+        }
+
         Ok(())
     }
 
-    fn route_arp(&mut self, pkt: Vec<u8>) -> Result<(), ProtocolError> {
+    fn handle_arp(&mut self, pkt: Vec<u8>) -> Result<RouterAction, ProtocolError> {
         tracing::trace!("handling arp packet");
-        let mut arp = ArpPacket::parse(&pkt)?;
+        let arp = ArpPacket::parse(&pkt)?;
         if arp.tpa == IpAddr::V4(self.ip4) {
-            arp.to_reply(self.mac);
-
-            let src = arp.sha;
-            let dst = arp.tha;
-            self.to_device(src, dst, EtherType::ARP, arp.to_bytes());
-        }
-
-        Ok(())
-    }
-
-    fn route_ip4(&mut self, ef_hdr: EthernetFrame, mut pkt: Vec<u8>) -> Result<(), ProtocolError> {
-        let ip_hdr = Ipv4Header::extract(&mut pkt)?;
-        let resp = if ip_hdr.dst == self.ip4 {
-            match ip_hdr.protocol {
-                1 /* ICMP */ => match pkt[0] {
-                    8 /* ECHO REQUEST */ => {
-                        Some(self.handle_icmp_echo_req(&pkt))
-                    }
-                    _ => {
-                        tracing::warn!("[local-device] unhandled icmp packet (type = {}, code = {}", pkt[21], pkt[22]);
-                        None
-                    }
-                },
-                _ => {
-                    tracing::warn!(protocol = pkt[9], "[local-device] unhandled protocol");
-                    None
-                }
-            }
+            let pkt = self.local.handle_arp_request(arp);
+            Ok(RouterAction::Respond(pkt))
         } else {
-            None
-        };
-
-        if let Some(data) = resp {
-            let ip_hdr = ip_hdr.as_reply();
-            let ip_pkt = ip_hdr.to_vec(&data);
-
-            self.to_device(ef_hdr.dst, ef_hdr.src, ef_hdr.ethertype, ip_pkt);
+            // TODO: broadcast to all other connected devices
+            Ok(RouterAction::Drop(pkt))
         }
-
-        Ok(())
     }
 
-    fn route_ip6(&self, _pkt: Vec<u8>) -> Result<(), ProtocolError> {
+    fn route_ip4(
+        &mut self,
+        ef_hdr: EthernetFrame,
+        mut pkt: Vec<u8>,
+    ) -> Result<RouterAction, ProtocolError> {
+        let ip_hdr = Ipv4Header::extract(&mut pkt)?;
+        match self.local.can_handle(ip_hdr.dst) {
+            true => Ok(self.local.handle_ip4_packet(ef_hdr, ip_hdr, pkt)),
+            false => Ok(RouterAction::Forward(pkt)),
+        }
+    }
+
+    fn route_ip6(&self, pkt: Vec<u8>) -> Result<RouterAction, ProtocolError> {
         tracing::warn!("ipv6 not supported");
-        Ok(())
-    }
-
-    /// Handles a ICMP echo request to the local device ip
-    ///
-    /// Responds with an echo reply and queues it in the virtqueues rx ring
-    fn handle_icmp_echo_req(&self, pkt: &[u8]) -> Vec<u8> {
-        tracing::trace!("handling icmp echo request");
-        let mut data = Vec::with_capacity(pkt.len());
-        data.push(0 /* ECHO REPLY */);
-        data.push(0 /* CODE */);
-        data.extend_from_slice(&[0x00, 0x00]);
-        data.extend_from_slice(&pkt[4..]);
-
-        let csum = checksum(&data);
-        data[2..4].copy_from_slice(&csum.to_be_bytes());
-        data
+        Ok(RouterAction::Drop(pkt))
     }
 
     /// Builds the Ethernet (layer 2) header and queues the packet to
@@ -207,14 +196,10 @@ impl Router {
     /// * `dst` - Destination MAC Address
     /// * `ty` - Type of payload
     /// * `data` - Layer3+ data
-    fn to_device(&mut self, src: MacAddress, dst: MacAddress, ty: EtherType, mut data: Vec<u8>) {
-        let mut pkt = Vec::with_capacity(12 + data.len());
-        pkt.extend_from_slice(dst.as_bytes());
-        pkt.extend_from_slice(src.as_bytes());
-        pkt.extend_from_slice(&ty.as_u16().to_be_bytes());
-        pkt.append(&mut data);
-
+    fn to_device(&mut self, pkt: Vec<u8>) {
         self.log_packet(&pkt);
+
+        let dst = MacAddress::parse(&pkt[0..6]).expect("dst mac not found");
 
         // get the port to send out on
         match self.ports.get(&dst) {
@@ -237,7 +222,7 @@ impl RouterHandle {
     /// * `port` - Port device is connected to
     /// * `pkt` - Ethernet-Framed (i.e. Layer 2) packet
     pub fn route(&self, port: usize, pkt: Vec<u8>) {
-        self.tx.send(RouterMsg::Packet(port, pkt)).ok();
+        self.tx.send(RouterMsg::Packet(port - 1, pkt)).ok();
     }
 
     /// Connects a new device to the router, returning the port it is connected to
@@ -246,7 +231,7 @@ impl RouterHandle {
         let idx = devices.len();
         devices.push(queue);
 
-        idx
+        idx + 1
     }
 }
 
