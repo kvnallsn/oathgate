@@ -1,12 +1,7 @@
 //! Simple Router
 
 use std::{
-    borrow::Cow,
-    collections::HashMap,
-    fs::File,
-    net::{IpAddr, Ipv4Addr},
-    path::PathBuf,
-    sync::Arc,
+    borrow::Cow, collections::HashMap, fs::File, net::Ipv4Addr, path::PathBuf, sync::Arc,
     time::UNIX_EPOCH,
 };
 
@@ -37,11 +32,16 @@ pub enum RouterAction {
 }
 
 pub struct Router {
-    ip4: Ipv4Addr,
     pcap: Option<PcapWriter<File>>,
     devices: Arc<Mutex<Vec<TapDeviceRxQueue>>>,
     ports: HashMap<MacAddress, usize>,
     local: LocalDevice,
+}
+
+#[derive(Debug, Default)]
+pub struct RouterBuilder {
+    pcap: Option<PathBuf>,
+    upstream: Option<Sender<()>>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,9 +50,33 @@ pub struct RouterHandle {
     devices: Arc<Mutex<Vec<TapDeviceRxQueue>>>,
 }
 
-impl Router {
-    pub fn new(ip4: Ipv4Addr, pcap: Option<PathBuf>) -> std::io::Result<RouterHandle> {
-        let pcap_writer = match pcap.as_ref() {
+#[allow(dead_code)]
+impl RouterBuilder {
+    /// Set the file to save pcap output to, or None to disable pcap completely
+    ///
+    /// If the file does not exist, it will be created, if the file already exists,
+    /// it will be truncated.
+    ///
+    /// ### Arguments
+    /// * `pcap` - Path on disk to location of pcap file
+    pub fn pcap<P: Into<Option<PathBuf>>>(mut self, pcap: P) -> Self {
+        self.pcap = pcap.into();
+        self
+    }
+
+    pub fn upstream(mut self, tx: Sender<()>) -> Self {
+        self.upstream = Some(tx);
+        self
+    }
+
+    /// Create the router, spawning a new thread to run the core logic
+    ///
+    /// ### Arguments
+    /// * `ip4` - IPv4 address to assign to this router
+    pub fn build<I: Into<Ipv4Addr>>(self, ip4: I) -> std::io::Result<RouterHandle> {
+        let ip4 = ip4.into();
+
+        let pcap_writer = match self.pcap.as_ref() {
             None => None,
             Some(f) => {
                 let file = File::options()
@@ -76,7 +100,6 @@ impl Router {
         let local = LocalDevice::new(ip4);
 
         let router = Router {
-            ip4,
             pcap: pcap_writer,
             devices,
             ports: HashMap::new(),
@@ -88,6 +111,12 @@ impl Router {
             .spawn(move || router.run(rx))?;
 
         Ok(handle)
+    }
+}
+
+impl Router {
+    pub fn builder() -> RouterBuilder {
+        RouterBuilder::default()
     }
 
     fn run(mut self, rx: Receiver<RouterMsg>) {
@@ -107,7 +136,7 @@ impl Router {
         tracing::debug!("router thread died");
     }
 
-    pub fn log_packet(&mut self, pkt: &[u8]) {
+    fn log_packet(&mut self, pkt: &[u8]) {
         if let Some(pwr) = self.pcap.as_mut() {
             // write packet to pcap file
             match pwr.write_packet(&PcapPacket {
@@ -126,7 +155,7 @@ impl Router {
     /// ### Arguments
     /// * `port` - Port packet was received on
     /// * `pkt` - An Ethernet II framed packet
-    pub fn route(&mut self, port: usize, mut pkt: Vec<u8>) -> Result<(), ProtocolError> {
+    fn route(&mut self, port: usize, mut pkt: Vec<u8>) -> Result<(), ProtocolError> {
         if pkt.len() < ETHERNET_HDR_SZ {
             return Err(ProtocolError::NotEnoughData(pkt.len(), ETHERNET_HDR_SZ));
         }
@@ -162,7 +191,7 @@ impl Router {
     fn handle_arp(&mut self, pkt: Vec<u8>) -> Result<RouterAction, ProtocolError> {
         tracing::trace!("handling arp packet");
         let arp = ArpPacket::parse(&pkt)?;
-        if arp.tpa == IpAddr::V4(self.ip4) {
+        if self.local.can_handle(arp.tpa) {
             let pkt = self.local.handle_arp_request(arp);
             Ok(RouterAction::Respond(pkt))
         } else {

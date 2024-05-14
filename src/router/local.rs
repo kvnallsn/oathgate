@@ -1,6 +1,6 @@
 //! Local device for handling local IP packets
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 
 use crate::router::checksum;
 
@@ -59,8 +59,11 @@ impl LocalDevice {
     }
 
     /// Returns true if a packet is destined for this local device
-    pub fn can_handle(&self, dst: Ipv4Addr) -> bool {
-        dst == self.ip4
+    pub fn can_handle<A: Into<IpAddr>>(&self, dst: A) -> bool {
+        match dst.into() {
+            IpAddr::V4(dst) => dst == self.ip4,
+            IpAddr::V6(_) => false,
+        }
     }
 
     pub fn handle_arp_request(&mut self, mut arp: ArpPacket) -> Vec<u8> {

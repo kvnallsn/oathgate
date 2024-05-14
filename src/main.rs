@@ -1,19 +1,25 @@
+mod config;
 mod device;
 mod error;
 mod queue;
 mod router;
 mod types;
+mod upstream;
 
-use std::{net::Ipv4Addr, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Args, Parser};
+use config::Config;
 use device::EventPoller;
 use router::Router;
 use tracing::Level;
 
 #[derive(Parser)]
 pub(crate) struct Opts {
+    /// Path to configuration file
+    pub config: PathBuf,
+
     /// Path to the unix socket to communicate with qemu's vhost-user driver
     #[arg(short, long, default_value = "/tmp/oathgate.sock")]
     pub socket: PathBuf,
@@ -38,12 +44,13 @@ pub(crate) struct DeviceOpts {
 }
 
 fn run(opts: Opts) -> Result<()> {
+    let cfg = Config::load(opts.config)?;
+    tracing::debug!(?cfg, "configuration");
+
     let mut poller = EventPoller::new(opts.socket)?;
 
-    let ip4 = Ipv4Addr::from([10, 10, 10, 1]);
-
     // spawn thread to receive messages/packets
-    let router = Router::new(ip4, opts.pcap)?;
+    let router = Router::builder().pcap(opts.pcap).build(cfg.router.ipv4)?;
 
     poller.run(opts.device, router)?;
 
