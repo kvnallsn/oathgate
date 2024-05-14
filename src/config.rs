@@ -1,6 +1,11 @@
 //! Configuration file module
 
-use std::{fs::File, io, net::{Ipv4Addr, SocketAddr}, path::Path};
+use std::{
+    fs::File,
+    io,
+    net::{Ipv4Addr, SocketAddr},
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +43,8 @@ impl Config {
     /// * `path` - Path to the configuration file
     pub fn load<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let f = File::open(path)?;
-        let cfg: Config = serde_yaml::from_reader(f).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let cfg: Config =
+            serde_yaml::from_reader(f).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(cfg)
     }
 }

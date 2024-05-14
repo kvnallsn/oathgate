@@ -23,7 +23,7 @@ use parking_lot::lock_api::Mutex;
 use vm_memory::{GuestAddress, GuestMemoryAtomic, GuestMemoryMmap, GuestRegionMmap, MmapRegion};
 
 use crate::{
-    error::{Error, MemoryError, PayloadError, AppResult},
+    error::{AppResult, Error, MemoryError, PayloadError},
     queue::VirtQueue,
     router::RouterHandle,
     types::{
@@ -646,9 +646,7 @@ impl TapDevice {
                 let files = hdr.extract_fds()?;
 
                 if region_descs.len() != files.len() {
-                    return Err(Error::InvalidMessage(
-                        "set_mem_table: region / fd mismatch",
-                    ));
+                    return Err(Error::InvalidMessage("set_mem_table: region / fd mismatch"));
                 }
 
                 let mut regions = Vec::with_capacity(region_descs.len());
@@ -805,8 +803,6 @@ impl TapDevice {
     /// ### Arguments
     /// * `idx` - Reference to a virtqueue at the specified index
     fn get_virtqueue_mut(&mut self, idx: usize) -> AppResult<&mut VirtQueue> {
-        self.queues
-            .get_mut(idx)
-            .ok_or(Error::QueueNotFound(idx))
+        self.queues.get_mut(idx).ok_or(Error::QueueNotFound(idx))
     }
 }

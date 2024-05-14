@@ -12,7 +12,7 @@ use virtio_queue::{Queue, QueueOwnedT, QueueT};
 use vm_memory::{GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap};
 
 use crate::{
-    error::{MemoryError, Error, AppResult},
+    error::{AppResult, Error, MemoryError},
     router::RouterHandle,
     types::{DeviceRxQueue, VirtioNetHeader},
 };
