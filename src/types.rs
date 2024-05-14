@@ -2,7 +2,6 @@
 
 use std::{collections::VecDeque, fmt::Debug, os::fd::RawFd, sync::Arc};
 
-use anyhow::Result;
 use bitflags::bitflags;
 use nix::sys::socket::ControlMessageOwned;
 use parking_lot::Mutex;

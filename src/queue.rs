@@ -7,13 +7,12 @@ use std::{
     os::fd::{FromRawFd, RawFd},
 };
 
-use anyhow::Result;
 use nix::unistd;
 use virtio_queue::{Queue, QueueOwnedT, QueueT};
 use vm_memory::{GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap};
 
 use crate::{
-    error::{MemoryError, MessageError},
+    error::{MemoryError, Error, AppResult},
     router::RouterHandle,
     types::{DeviceRxQueue, VirtioNetHeader},
 };
@@ -161,11 +160,11 @@ impl VirtQueue {
     /// ### Arguments
     /// * `pkt` - data from kick file descriptor
     /// * `router_port` - Port device is connected to on the router
-    pub fn kick_tx(&mut self, pkt: &[u8], router_port: usize) -> Result<(), MessageError> {
+    pub fn kick_tx(&mut self, pkt: &[u8], router_port: usize) -> AppResult<()> {
         let enabled = crate::cast!(u64, pkt[0..8]);
         if enabled == 0 {
             tracing::warn!(fd = ?self.kick_fd, "virtqueue not enabled, ignore kick");
-            return Err(MessageError::QueueDisabled);
+            return Err(Error::QueueDisabled);
         }
 
         let mem = match self.mem.as_ref().map(|m| m.memory()) {
@@ -204,11 +203,11 @@ impl VirtQueue {
         Ok(())
     }
 
-    pub fn kick_rx(&mut self, pkt: &[u8]) -> Result<(), MessageError> {
+    pub fn kick_rx(&mut self, pkt: &[u8]) -> AppResult<()> {
         let enabled = crate::cast!(u64, pkt[0..8]);
         if enabled == 0 {
             tracing::warn!(fd = ?self.kick_fd, "virtqueue not enabled, ignore kick");
-            return Err(MessageError::QueueDisabled);
+            return Err(Error::QueueDisabled);
         }
 
         // check if we have waiting messages to send?
@@ -217,7 +216,7 @@ impl VirtQueue {
         Ok(())
     }
 
-    pub fn handle_rx_queued(&mut self) -> Result<(), MessageError> {
+    pub fn handle_rx_queued(&mut self) -> AppResult<()> {
         let mut pending = self.pending.lock();
         if pending.is_empty() {
             return Ok(());
@@ -275,10 +274,10 @@ impl VirtQueue {
     /// ### Arguments
     /// * `pkt` - data to write to call file descriptor
     /// * `mem` - Mapped memory to read from
-    pub fn call(&self, pkt: &[u8]) -> Result<(), MessageError> {
+    pub fn call(&self, pkt: &[u8]) -> AppResult<()> {
         if !self.enabled {
             tracing::warn!(fd = ?self.call_fd, "virtqueue not enabled, ignore call");
-            return Err(MessageError::QueueDisabled);
+            return Err(Error::QueueDisabled);
         }
 
         if let Some(fd) = self.call_fd.as_ref() {

@@ -8,10 +8,10 @@ mod upstream;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
 use clap::{Args, Parser};
 use config::Config;
 use device::EventPoller;
+use error::AppResult;
 use router::Router;
 use tracing::Level;
 
@@ -43,7 +43,7 @@ pub(crate) struct DeviceOpts {
     pub device_queues: u8,
 }
 
-fn run(opts: Opts) -> Result<()> {
+fn run(opts: Opts) -> AppResult<()> {
     let cfg = Config::load(opts.config)?;
     tracing::debug!(?cfg, "configuration");
 

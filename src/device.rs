@@ -10,7 +10,6 @@ use std::{
     usize,
 };
 
-use anyhow::Result;
 use mio::{net::UnixStream, unix::SourceFd, Events, Interest, Poll, Token, Waker};
 use nix::{
     errno::Errno,
@@ -24,7 +23,7 @@ use parking_lot::lock_api::Mutex;
 use vm_memory::{GuestAddress, GuestMemoryAtomic, GuestMemoryMmap, GuestRegionMmap, MmapRegion};
 
 use crate::{
-    error::{MemoryError, MessageError, PayloadError},
+    error::{Error, MemoryError, PayloadError, AppResult},
     queue::VirtQueue,
     router::RouterHandle,
     types::{
@@ -144,7 +143,7 @@ impl TapDevice {
     ///
     /// ### Arguments
     /// * `num_queues` - Number of trasmit/receive virtqueue pairs for thsi device
-    pub fn new(router: RouterHandle, opts: DeviceOpts) -> Result<Self> {
+    pub fn new(router: RouterHandle, opts: DeviceOpts) -> AppResult<Self> {
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), TOKEN_WAKE)?;
         let rx = TapDeviceRxQueue {
@@ -176,7 +175,7 @@ impl TapDevice {
         })
     }
 
-    pub fn spawn(mut self, strm: UnixStream) -> Result<()> {
+    pub fn spawn(mut self, strm: UnixStream) -> AppResult<()> {
         std::thread::Builder::new()
             .name(String::from("oathgate-device"))
             .spawn(move || {
@@ -187,7 +186,7 @@ impl TapDevice {
         Ok(())
     }
 
-    pub fn run(&mut self, mut strm: UnixStream) -> Result<()> {
+    pub fn run(&mut self, mut strm: UnixStream) -> AppResult<()> {
         self.poll
             .registry()
             .register(&mut strm, TOKEN_STRM, Interest::READABLE)?;
@@ -204,7 +203,7 @@ impl TapDevice {
                         'read: loop {
                             match self.read_stream(raw_fd) {
                                 Ok(_) => { /* success, do nothing */ }
-                                Err(MessageError::Errno(Errno::EWOULDBLOCK)) => {
+                                Err(Error::Errno(Errno::EWOULDBLOCK)) => {
                                     // no more data, stop the loop
                                     break 'read;
                                 }
@@ -243,7 +242,7 @@ impl TapDevice {
         }
     }
 
-    fn read_stream(&mut self, strm: RawFd) -> Result<(), MessageError> {
+    fn read_stream(&mut self, strm: RawFd) -> AppResult<()> {
         tracing::trace!("reading unix control stream");
 
         // first read the header
@@ -260,7 +259,7 @@ impl TapDevice {
                     VHostHeader::parse(&hdr, ancillary)
                 }
                 _ => {
-                    return Err(MessageError::HeaderMissing);
+                    return Err(Error::HeaderMissing);
                 }
             }
         };
@@ -284,7 +283,7 @@ impl TapDevice {
         Ok(())
     }
 
-    fn parse_msg(&mut self, strm: RawFd, mut hdr: VHostHeader) -> Result<(), MessageError> {
+    fn parse_msg(&mut self, strm: RawFd, mut hdr: VHostHeader) -> AppResult<()> {
         if hdr.ack_required() {
             tracing::trace!(ty = hdr.ty, "ack required");
         }
@@ -647,7 +646,7 @@ impl TapDevice {
                 let files = hdr.extract_fds()?;
 
                 if region_descs.len() != files.len() {
-                    return Err(MessageError::InvalidMessage(
+                    return Err(Error::InvalidMessage(
                         "set_mem_table: region / fd mismatch",
                     ));
                 }
@@ -756,7 +755,7 @@ impl TapDevice {
         Ok(())
     }
 
-    fn send_msg(&mut self, id: u32, payload: &[u8]) -> Result<(), MessageError> {
+    fn send_msg(&mut self, id: u32, payload: &[u8]) -> AppResult<()> {
         if let Some(f) = self.channel.as_ref() {
             let payload_sz = payload.len() as u32;
             let mut resp = vec![0u8; VHOST_USER_HEADER_SZ + payload.len()];
@@ -774,7 +773,7 @@ impl TapDevice {
         Ok(())
     }
 
-    fn send_response(&mut self, strm: RawFd, id: u32, payload: &[u8]) -> Result<(), MessageError> {
+    fn send_response(&mut self, strm: RawFd, id: u32, payload: &[u8]) -> AppResult<()> {
         let payload_sz = payload.len() as u32;
         let mut resp = vec![0u8; VHOST_USER_HEADER_SZ + payload.len()];
         resp[0..4].copy_from_slice(&id.to_le_bytes());
@@ -805,9 +804,9 @@ impl TapDevice {
     ///
     /// ### Arguments
     /// * `idx` - Reference to a virtqueue at the specified index
-    fn get_virtqueue_mut(&mut self, idx: usize) -> Result<&mut VirtQueue, MessageError> {
+    fn get_virtqueue_mut(&mut self, idx: usize) -> AppResult<&mut VirtQueue> {
         self.queues
             .get_mut(idx)
-            .ok_or(MessageError::QueueNotFound(idx))
+            .ok_or(Error::QueueNotFound(idx))
     }
 }

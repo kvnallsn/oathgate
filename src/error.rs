@@ -4,6 +4,9 @@ use std::num::TryFromIntError;
 
 use nix::errno::Errno;
 
+/// Helper type for application errors
+pub type AppResult<T> = std::result::Result<T, Error>;
+
 #[derive(thiserror::Error, Clone, Debug)]
 pub enum PayloadError {
     #[error("Payload is missing")]
@@ -56,7 +59,13 @@ pub enum QueueError {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum MessageError {
+pub enum UpstreamError {
+    #[error("unable to create upstream")]
+    CreateFailed(String),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
     #[error("error: {0}")]
     Errno(#[from] Errno),
 
@@ -98,9 +107,12 @@ pub enum MessageError {
 
     #[error("protocol failed: {0}")]
     Protocol(#[from] ProtocolError),
+
+    #[error("upstream: {0}")]
+    Upstream(#[from] UpstreamError),
 }
 
-impl<T> From<flume::SendError<T>> for MessageError {
+impl<T> From<flume::SendError<T>> for Error {
     fn from(_value: flume::SendError<T>) -> Self {
         Self::ChannelClosed
     }
