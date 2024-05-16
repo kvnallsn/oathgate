@@ -6,7 +6,7 @@ use crate::router::checksum;
 
 use super::{
     protocols::{ArpPacket, EtherType, EthernetFrame, Ipv4Header, MacAddress},
-    RouterAction, RouterHandle,
+    RouterAction,
 };
 
 const MAX_MTU: usize = 1560;
@@ -113,11 +113,11 @@ impl LocalDevice {
                 rpkt.truncate(L2L3_HEADER_SZ + len);
 
                 // build ethernet header
-                let efhdr = efhdr.as_reply();
+                let efhdr = efhdr.gen_reply();
                 efhdr.as_bytes(&mut rpkt);
 
                 // build ipv4 header
-                let iphdr = iphdr.as_reply(&rpkt[34..]);
+                let iphdr = iphdr.gen_reply(&rpkt[34..]);
                 iphdr.as_bytes(&mut rpkt[14..34]);
 
                 RouterAction::Respond(rpkt)

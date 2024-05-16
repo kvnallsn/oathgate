@@ -15,6 +15,11 @@ use error::AppResult;
 use router::Router;
 use tracing::Level;
 
+use crate::{
+    config::UpstreamConfig,
+    upstream::{Tun, UdpDevice},
+};
+
 #[derive(Parser)]
 pub(crate) struct Opts {
     /// Path to configuration file
@@ -51,6 +56,19 @@ fn run(opts: Opts) -> AppResult<()> {
 
     // spawn thread to receive messages/packets
     let router = Router::builder().pcap(opts.pcap).build(cfg.router.ipv4)?;
+
+    // spawn the default route / upstream
+    match cfg.upstream {
+        UpstreamConfig::Tap(opts) => {
+            let upstream = Tun::create(opts.device)?;
+            upstream.spawn(router.clone())?;
+        }
+        UpstreamConfig::Udp(opts) => {
+            let upstream = UdpDevice::connect(opts.endpoint)?;
+            upstream.spawn(router.clone())?;
+        }
+        UpstreamConfig::Wireguard(_opts) => (),
+    }
 
     poller.run(opts.device, router)?;
 

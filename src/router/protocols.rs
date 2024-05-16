@@ -142,7 +142,7 @@ impl EthernetFrame {
         ETHERNET_FRAME_SIZE
     }
 
-    pub fn as_reply(&self) -> Self {
+    pub fn gen_reply(&self) -> Self {
         Self {
             dst: self.src,
             src: self.dst,
@@ -154,15 +154,6 @@ impl EthernetFrame {
         pkt[0..6].copy_from_slice(&self.dst.as_bytes());
         pkt[6..12].copy_from_slice(&self.src.as_bytes());
         pkt[12..14].copy_from_slice(&self.ethertype.as_u16().to_be_bytes());
-    }
-
-    pub fn to_vec(self, data: &[u8]) -> Vec<u8> {
-        let mut pkt = Vec::with_capacity(data.len() + 12);
-        pkt.extend_from_slice(&self.dst.as_bytes());
-        pkt.extend_from_slice(&self.src.as_bytes());
-        pkt.extend_from_slice(&self.ethertype.as_u16().to_be_bytes());
-        pkt.extend_from_slice(data);
-        pkt
     }
 }
 
@@ -180,6 +171,13 @@ pub struct Ipv4Header {
 }
 
 impl Ipv4Header {
+    /// Creates a new IPv4 header from the supplied values
+    ///
+    /// ### Arguments
+    /// * `src` - Source address
+    /// * `dst` - Destination address
+    /// * `protocol` - Next header protocol (e.g., TCP, UDP, etc)
+    /// * `length` - Length of the expected payload data
     pub fn new(src: Ipv4Addr, dst: Ipv4Addr, protocol: u8, length: u16) -> Self {
         let mut rng = rand::thread_rng();
 
@@ -197,6 +195,11 @@ impl Ipv4Header {
         }
     }
 
+    /// Extracts the IPv4 header from a vector of bytes, or returns an error
+    /// if the supplied buffer is too small
+    ///
+    /// ### Arguments
+    /// * `pkt` - Vector containing ipv4 header
     pub fn extract(pkt: &mut Vec<u8>) -> Result<Self, ProtocolError> {
         if pkt.len() < 20 {
             return Err(ProtocolError::NotEnoughData(pkt.len(), 20));
@@ -228,8 +231,24 @@ impl Ipv4Header {
         })
     }
 
-    pub fn as_reply(&self, payload: &[u8]) -> Self {
+    /// Reverses the IPv4 source and destination addresses, generates a new id, and computes
+    /// the internet checksum over the provided payload length
+    ///
+    /// ### Arguments
+    /// * `payload` - Payload used to fill length field and generate checksum
+    pub fn gen_reply(&self, payload: &[u8]) -> Self {
         Ipv4Header::new(self.dst, self.src, self.protocol, payload.len() as u16)
+    }
+
+    /// Replaces the source address with the supplied value and returns
+    /// the original ipv4 address
+    ///
+    /// ### Arguments
+    /// * `src` - New IPv4 src address
+    pub fn masquerade(&mut self, src: Ipv4Addr) -> Ipv4Addr {
+        let old = self.src;
+        self.src = src;
+        old
     }
 
     /// Returns this header as a byte slice / array.
@@ -252,26 +271,11 @@ impl Ipv4Header {
         rpkt[10..12].copy_from_slice(&csum.to_be_bytes());
     }
 
-    pub fn to_vec(self, data: &[u8]) -> Vec<u8> {
-        let length = (20 + data.len()) as u16;
-        let flags_frag = ((self.flags as u16) << 13) | self.frag_offset;
-
-        let mut pkt = Vec::new();
-        pkt.push((self.version << 4) | 5);
-        pkt.push(0x00 /* DSCP * ECN */);
-        pkt.extend_from_slice(&length.to_be_bytes());
-        pkt.extend_from_slice(&self.id.to_be_bytes());
-        pkt.extend_from_slice(&flags_frag.to_be_bytes());
-        pkt.push(self.ttl);
-        pkt.push(self.protocol);
-        pkt.extend_from_slice(&[0x00, 0x00] /* checksum */);
-        pkt.extend_from_slice(&self.src.octets());
-        pkt.extend_from_slice(&self.dst.octets());
-        pkt.extend_from_slice(&data);
-
-        let csum = checksum(&pkt[0..20]);
-        pkt[10..12].copy_from_slice(&csum.to_be_bytes());
-        pkt
+    /// Returns this header an array of bytes
+    pub fn into_bytes(self) -> [u8; 20] {
+        let mut buf = [0u8; 20];
+        self.as_bytes(&mut buf);
+        buf
     }
 }
 
@@ -439,25 +443,5 @@ impl ArpPacket {
             }
             _ => tracing::warn!("mismatched ip4/ip6 in arp packet"),
         }
-    }
-
-    pub fn to_bytes(self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(std::mem::size_of_val(&self));
-        data.extend_from_slice(&self.hardware_type.to_be_bytes());
-        data.extend_from_slice(&self.protocol_type.as_u16().to_be_bytes());
-        data.push(self.hardware_len);
-        data.push(self.protocol_len);
-        data.extend_from_slice(&self.operation.to_be_bytes());
-        data.extend_from_slice(&self.sha.as_bytes());
-        match self.spa {
-            IpAddr::V4(ip) => data.extend_from_slice(ip.octets().as_slice()),
-            IpAddr::V6(ip) => data.extend_from_slice(ip.octets().as_slice()),
-        }
-        data.extend_from_slice(&self.tha.as_bytes());
-        match self.tpa {
-            IpAddr::V4(ip) => data.extend_from_slice(ip.octets().as_slice()),
-            IpAddr::V6(ip) => data.extend_from_slice(ip.octets().as_slice()),
-        }
-        data
     }
 }

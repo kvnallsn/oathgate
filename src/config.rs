@@ -11,9 +11,17 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
-    pub upstream: WgConfig,
+    pub upstream: UpstreamConfig,
     pub router: RouterConfig,
     pub virtio: VirtioConfig,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum UpstreamConfig {
+    Tap(TapConfig),
+    Udp(UdpConfig),
+    Wireguard(WgConfig),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -21,6 +29,16 @@ pub struct WgConfig {
     pub key: String,
     pub ipv4: Ipv4Addr,
     pub peer: String,
+    pub endpoint: SocketAddr,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TapConfig {
+    pub device: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UdpConfig {
     pub endpoint: SocketAddr,
 }
 

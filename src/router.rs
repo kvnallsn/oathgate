@@ -9,7 +9,7 @@ use flume::{Receiver, Sender};
 use parking_lot::Mutex;
 use pcap_file::pcap::{PcapPacket, PcapWriter};
 
-use crate::{device::TapDeviceRxQueue, error::ProtocolError};
+use crate::{device::TapDeviceRxQueue, error::ProtocolError, upstream::BoxUpstreamHandle};
 
 use self::{
     local::LocalDevice,
@@ -17,17 +17,21 @@ use self::{
 };
 
 mod local;
-mod protocols;
+pub mod protocols;
 
 const ETHERNET_HDR_SZ: usize = 14;
 
 pub enum RouterMsg {
+    /// A packet that needs to be routed
     Packet(usize, Vec<u8>),
+
+    /// Sets the default route to the associated sender
+    SetUpstream(BoxUpstreamHandle),
 }
 
 pub enum RouterAction {
     Respond(Vec<u8>),
-    Forward(Vec<u8>),
+    Forward(Ipv4Header, Vec<u8>),
     Drop(Vec<u8>),
 }
 
@@ -36,6 +40,7 @@ pub struct Router {
     devices: Arc<Mutex<Vec<TapDeviceRxQueue>>>,
     ports: HashMap<MacAddress, usize>,
     local: LocalDevice,
+    upstream: Option<BoxUpstreamHandle>,
 }
 
 #[derive(Debug, Default)]
@@ -104,6 +109,7 @@ impl RouterBuilder {
             devices,
             ports: HashMap::new(),
             local,
+            upstream: None,
         };
 
         std::thread::Builder::new()
@@ -126,6 +132,9 @@ impl Router {
                     Ok(_) => tracing::trace!("routed packet"),
                     Err(error) => tracing::warn!(?error, "unable to route packet"),
                 },
+                Ok(RouterMsg::SetUpstream(handle)) => {
+                    self.upstream = Some(handle);
+                }
                 Err(error) => {
                     tracing::error!(?error, "router channel closed");
                     break;
@@ -181,7 +190,14 @@ impl Router {
 
         match action {
             RouterAction::Respond(pkt) => self.to_device(pkt),
-            RouterAction::Forward(_pkt) => tracing::debug!("[router] forwarding packet upstream"),
+            RouterAction::Forward(dst, pkt) => {
+                match self.upstream.as_ref() {
+                    Some(upstream) => {
+                        upstream.write(dst, pkt).ok();
+                    },
+                    None => tracing::warn!("[router] no upstream device found"),
+                }
+            }
             RouterAction::Drop(_pkt) => tracing::debug!("[router] dropping packet"),
         }
 
@@ -208,7 +224,7 @@ impl Router {
         let ip_hdr = Ipv4Header::extract(&mut pkt)?;
         match self.local.can_handle(ip_hdr.dst) {
             true => Ok(self.local.handle_ip4_packet(ef_hdr, ip_hdr, pkt)),
-            false => Ok(RouterAction::Forward(pkt)),
+            false => Ok(RouterAction::Forward(ip_hdr, pkt)),
         }
     }
 
@@ -252,6 +268,14 @@ impl RouterHandle {
     /// * `pkt` - Ethernet-Framed (i.e. Layer 2) packet
     pub fn route(&self, port: usize, pkt: Vec<u8>) {
         self.tx.send(RouterMsg::Packet(port - 1, pkt)).ok();
+    }
+
+    /// Registers the provided upstream handle as the default route
+    ///
+    /// ### Arguments
+    /// * `handle` - Default route for packets not destined for conencted devices
+    pub fn set_upstream(&self, handle: BoxUpstreamHandle) {
+        self.tx.send(RouterMsg::SetUpstream(handle)).ok();
     }
 
     /// Connects a new device to the router, returning the port it is connected to
