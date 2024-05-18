@@ -4,6 +4,7 @@ use std::{collections::VecDeque, fmt::Debug, os::fd::RawFd, sync::Arc};
 
 use bitflags::bitflags;
 use nix::sys::socket::ControlMessageOwned;
+use oathgate_net::EthernetPacket;
 use parking_lot::Mutex;
 
 use crate::{device::TryFromPayload, error::PayloadError};
@@ -171,7 +172,7 @@ bitflags! {
     }
 }
 
-pub type DeviceRxQueue = Arc<Mutex<VecDeque<Vec<u8>>>>;
+pub type DeviceRxQueue = Arc<Mutex<VecDeque<EthernetPacket>>>;
 
 #[derive(Debug)]
 pub struct VirtioNetHeader {
@@ -414,16 +415,16 @@ impl VirtioNetHeader {
         Ok((hdr, pkt))
     }
 
-    pub fn to_vec(self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(std::mem::size_of_val(&self));
-        data.push(self.flags.bits());
-        data.push(self.gso_type.bits());
-        data.extend_from_slice(&self.hdr_len.to_le_bytes());
-        data.extend_from_slice(&self.gso_size.to_le_bytes());
-        data.extend_from_slice(&self.csum_start.to_le_bytes());
-        data.extend_from_slice(&self.csum_offset.to_le_bytes());
-        data.extend_from_slice(&self.num_buffers.to_le_bytes());
-        data
+    pub fn as_bytes(&self) -> [u8; VIRTIO_NET_HDR_SZ] {
+        let mut bytes = [0u8; VIRTIO_NET_HDR_SZ];
+        bytes[0] = self.flags.bits();
+        bytes[1] = self.gso_type.bits();
+        bytes[2..4].copy_from_slice(&self.hdr_len.to_le_bytes());
+        bytes[4..6].copy_from_slice(&self.gso_size.to_le_bytes());
+        bytes[6..8].copy_from_slice(&self.csum_start.to_le_bytes());
+        bytes[8..10].copy_from_slice(&self.csum_offset.to_le_bytes());
+        bytes[10..12].copy_from_slice(&self.num_buffers.to_le_bytes());
+        bytes
     }
 }
 

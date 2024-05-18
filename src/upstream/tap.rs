@@ -2,11 +2,12 @@
 
 use std::{fmt::Debug, fs::File, io::{IoSlice, Read, Write}, net::Ipv4Addr, os::fd::AsRawFd, sync::Arc};
 
-use crate::{error::{AppResult, UpstreamError}, router::{protocols::Ipv4Header, RouterHandle}};
+use crate::{error::{AppResult, UpstreamError}, router::RouterHandle};
 
 use flume::{Receiver, Sender};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token, Waker};
 use nix::{libc::{IFF_NO_PI, IFF_TUN, IFNAMSIZ}, net::if_::if_nametoindex};
+use oathgate_net::Ipv4Header;
 
 use super::UpstreamHandle;
 

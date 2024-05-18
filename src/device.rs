@@ -19,13 +19,14 @@ use nix::{
     },
     unistd,
 };
+use oathgate_net::{EthernetFrame, EthernetPacket};
 use parking_lot::lock_api::Mutex;
 use vm_memory::{GuestAddress, GuestMemoryAtomic, GuestMemoryMmap, GuestRegionMmap, MmapRegion};
 
 use crate::{
     error::{AppResult, Error, MemoryError, PayloadError},
     queue::VirtQueue,
-    router::RouterHandle,
+    router::{RouterHandle, RouterPort},
     types::{
         DeviceRxQueue, GuestMapping, MemoryRegionDescription, VHostHeader,
         VHostUserProtocolFeature, VRingAddr, VRingDescriptor, VRingState, VirtioFeatures,
@@ -125,14 +126,17 @@ impl TapDeviceRxQueue {
     pub fn queue(&self) -> DeviceRxQueue {
         Arc::clone(&self.queue)
     }
+}
+
+impl RouterPort for TapDeviceRxQueue {
 
     /// Puts a packet into the queue and notifies the device
     ///
     /// ### Arguments
     /// * `pkt` - Packet to send to the device
-    pub fn enqueue(&self, pkt: Vec<u8>) {
+    fn enqueue(&self, frame: EthernetFrame, pkt: Vec<u8>) {
         let mut queue = self.queue.lock();
-        queue.push_back(pkt);
+        queue.push_back(EthernetPacket::new(frame, pkt));
         drop(queue);
         self.waker.wake().ok();
     }

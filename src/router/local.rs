@@ -2,12 +2,11 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use crate::router::checksum;
-
-use super::{
-    protocols::{ArpPacket, EtherType, EthernetFrame, Ipv4Header, MacAddress},
-    RouterAction,
+use oathgate_net::{
+    checksum, protocols::ArpPacket, types::{EtherType, MacAddress}, EthernetFrame, Ipv4Header
 };
+
+use super::RouterAction;
 
 const MAX_MTU: usize = 1560;
 
@@ -83,18 +82,17 @@ impl LocalDevice {
     /// Handles an ip4 packet sent to this device
     pub fn handle_ip4_packet(
         &self,
-        efhdr: EthernetFrame,
         iphdr: Ipv4Header,
         payload: Vec<u8>,
     ) -> RouterAction {
-        const L2L3_HEADER_SZ: usize = 34;
+        const L3_HEADER_SZ: usize = 20;
 
         let mut rpkt = vec![0u8; MAX_MTU];
 
         let resp = match iphdr.protocol {
             1 /* ICMP */ => match payload[0] {
                 8 /* ECHO REQUEST */ => {
-                    Some(self.handle_icmp_echo_req(&payload, &mut rpkt[L2L3_HEADER_SZ..]))
+                    Some(self.handle_icmp_echo_req(&payload, &mut rpkt[L3_HEADER_SZ..]))
                 }
                 _ => {
                     tracing::warn!("[local-device] unhandled icmp packet (type = {}, code = {}", payload[0], payload[1]);
@@ -110,17 +108,13 @@ impl LocalDevice {
         match resp {
             Some(len) => {
                 // Drop unneeded bytes
-                rpkt.truncate(L2L3_HEADER_SZ + len);
-
-                // build ethernet header
-                let efhdr = efhdr.gen_reply();
-                efhdr.as_bytes(&mut rpkt);
+                rpkt.truncate(L3_HEADER_SZ + len);
 
                 // build ipv4 header
-                let iphdr = iphdr.gen_reply(&rpkt[34..]);
-                iphdr.as_bytes(&mut rpkt[14..34]);
+                let iphdr = iphdr.gen_reply(&rpkt[20..]);
+                iphdr.as_bytes(&mut rpkt[0..20]);
 
-                RouterAction::Respond(rpkt)
+                RouterAction::Respond(iphdr.dst.into(), rpkt)
             }
             None => RouterAction::Drop(payload),
         }

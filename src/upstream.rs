@@ -4,7 +4,9 @@ mod tap;
 mod udp;
 mod wireguard;
 
-use crate::{error::Error, router::protocols::Ipv4Header};
+use oathgate_net::Ipv4Header;
+
+use crate::error::Error;
 
 pub use self::{udp::UdpDevice, tap::Tun};
 

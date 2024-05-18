@@ -1,46 +1,62 @@
 //! Simple Router
 
 use std::{
-    borrow::Cow, collections::HashMap, fs::File, net::Ipv4Addr, path::PathBuf, sync::Arc,
+    borrow::Cow,
+    collections::HashMap,
+    fs::File,
+    net::{IpAddr, Ipv4Addr},
+    path::PathBuf,
+    sync::Arc,
     time::UNIX_EPOCH,
 };
 
 use flume::{Receiver, Sender};
+use oathgate_net::{
+    protocols::ArpPacket,
+    types::{EtherType, MacAddress},
+    EthernetFrame, Ipv4Header, ProtocolError,
+};
 use parking_lot::Mutex;
 use pcap_file::pcap::{PcapPacket, PcapWriter};
 
-use crate::{device::TapDeviceRxQueue, error::ProtocolError, upstream::BoxUpstreamHandle};
+use crate::{device::TapDeviceRxQueue, upstream::BoxUpstreamHandle};
 
-use self::{
-    local::LocalDevice,
-    protocols::{ArpPacket, EtherType, EthernetFrame, Ipv4Header, MacAddress},
-};
+use self::local::LocalDevice;
 
 mod local;
-pub mod protocols;
 
 const ETHERNET_HDR_SZ: usize = 14;
 
+pub trait RouterPort: Send + Sync {
+    fn enqueue(&self, frame: EthernetFrame, pkt: Vec<u8>);
+}
+
 pub enum RouterMsg {
-    /// A packet that needs to be routed
-    Packet(usize, Vec<u8>),
+    /// An Ethernet-Framed packet
+    L2Packet(usize, Vec<u8>),
+
+    /// An IPv4/IPv6 packet
+    L3Packet(EtherType, Vec<u8>),
 
     /// Sets the default route to the associated sender
     SetUpstream(BoxUpstreamHandle),
 }
 
 pub enum RouterAction {
-    Respond(Vec<u8>),
+    Respond(IpAddr, Vec<u8>),
     Forward(Ipv4Header, Vec<u8>),
     Drop(Vec<u8>),
 }
 
 pub struct Router {
     pcap: Option<PcapWriter<File>>,
-    devices: Arc<Mutex<Vec<TapDeviceRxQueue>>>,
+    devices: Arc<Mutex<Vec<Box<dyn RouterPort>>>>,
     ports: HashMap<MacAddress, usize>,
+    arp: HashMap<IpAddr, MacAddress>,
     local: LocalDevice,
     upstream: Option<BoxUpstreamHandle>,
+    mac: MacAddress,
+    ip4: Ipv4Addr,
 }
 
 #[derive(Debug, Default)]
@@ -49,10 +65,10 @@ pub struct RouterBuilder {
     upstream: Option<Sender<()>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RouterHandle {
     tx: Sender<RouterMsg>,
-    devices: Arc<Mutex<Vec<TapDeviceRxQueue>>>,
+    devices: Arc<Mutex<Vec<Box<dyn RouterPort>>>>,
 }
 
 #[allow(dead_code)]
@@ -108,8 +124,11 @@ impl RouterBuilder {
             pcap: pcap_writer,
             devices,
             ports: HashMap::new(),
+            arp: HashMap::new(),
             local,
             upstream: None,
+            mac: MacAddress::generate(),
+            ip4,
         };
 
         std::thread::Builder::new()
@@ -128,9 +147,13 @@ impl Router {
     fn run(mut self, rx: Receiver<RouterMsg>) {
         loop {
             match rx.recv() {
-                Ok(RouterMsg::Packet(port, pkt)) => match self.route(port, pkt) {
-                    Ok(_) => tracing::trace!("routed packet"),
-                    Err(error) => tracing::warn!(?error, "unable to route packet"),
+                Ok(RouterMsg::L2Packet(port, pkt)) => match self.switch(port, pkt) {
+                    Ok(_) => tracing::trace!("routed l2 packet"),
+                    Err(error) => tracing::warn!(?error, "unable to route l2 packet"),
+                },
+                Ok(RouterMsg::L3Packet(ty, pkt)) => match self.route(ty, pkt) {
+                    Ok(_) => tracing::trace!("routed l3 packet"),
+                    Err(error) => tracing::warn!(?error, "unable to route l2 packet"),
                 },
                 Ok(RouterMsg::SetUpstream(handle)) => {
                     self.upstream = Some(handle);
@@ -159,12 +182,7 @@ impl Router {
         }
     }
 
-    /// Routes a packet based on it's packet type
-    ///
-    /// ### Arguments
-    /// * `port` - Port packet was received on
-    /// * `pkt` - An Ethernet II framed packet
-    fn route(&mut self, port: usize, mut pkt: Vec<u8>) -> Result<(), ProtocolError> {
+    fn switch(&mut self, port: usize, mut pkt: Vec<u8>) -> Result<(), ProtocolError> {
         if pkt.len() < ETHERNET_HDR_SZ {
             return Err(ProtocolError::NotEnoughData(pkt.len(), ETHERNET_HDR_SZ));
         }
@@ -182,48 +200,75 @@ impl Router {
             None => tracing::debug!(mac = ?ef.src, port, "associating mac with router port"),
         }
 
-        let action = match ef.ethertype {
+        self.route(ef.ethertype, pkt)
+    }
+
+    /// Routes a packet based on it's packet type
+    ///
+    /// ### Arguments
+    /// * `ethertype` - What type of data is contained in the packet
+    /// * `pkt` - Packet data (based on ethertype)
+    fn route(&mut self, ethertype: EtherType, pkt: Vec<u8>) -> Result<(), ProtocolError> {
+        if pkt.len() < ETHERNET_HDR_SZ {
+            return Err(ProtocolError::NotEnoughData(pkt.len(), ETHERNET_HDR_SZ));
+        }
+
+        let action = match ethertype {
             EtherType::ARP => self.handle_arp(pkt),
-            EtherType::IPv4 => self.route_ip4(ef, pkt),
+            EtherType::IPv4 => self.route_ip4(pkt),
             EtherType::IPv6 => self.route_ip6(pkt),
         }?;
 
         match action {
-            RouterAction::Respond(pkt) => self.to_device(pkt),
-            RouterAction::Forward(dst, pkt) => {
-                match self.upstream.as_ref() {
-                    Some(upstream) => {
-                        upstream.write(dst, pkt).ok();
-                    },
-                    None => tracing::warn!("[router] no upstream device found"),
+            RouterAction::Respond(dst, pkt) => match self.arp.get(&dst) {
+                Some(dst) => self.to_device(*dst, ethertype, pkt),
+                None => {
+                    tracing::warn!(ip = ?dst, "[router] mac not found in arp cache, dropping packet")
                 }
-            }
+            },
+            RouterAction::Forward(dst, pkt) => match self.upstream.as_ref() {
+                Some(upstream) => {
+                    upstream.write(dst, pkt).ok();
+                }
+                None => tracing::warn!("[router] no upstream device found"),
+            },
             RouterAction::Drop(_pkt) => tracing::debug!("[router] dropping packet"),
         }
 
         Ok(())
     }
 
+    /// Returns true if a packet is destined for this local device
+    fn is_local<A: Into<IpAddr>>(&self, dst: A) -> bool {
+        match dst.into() {
+            IpAddr::V4(dst) => dst == self.ip4,
+            IpAddr::V6(_) => false,
+        }
+    }
+
     fn handle_arp(&mut self, pkt: Vec<u8>) -> Result<RouterAction, ProtocolError> {
         tracing::trace!("handling arp packet");
-        let arp = ArpPacket::parse(&pkt)?;
-        if self.local.can_handle(arp.tpa) {
-            let pkt = self.local.handle_arp_request(arp);
-            Ok(RouterAction::Respond(pkt))
+        let mut arp = ArpPacket::parse(&pkt)?;
+
+        tracing::debug!("associating mac to ip: {:?} -> {}", arp.spa, arp.sha);
+        self.arp.insert(arp.spa, arp.sha);
+
+        if self.is_local(arp.tpa) {
+            // responsd with router's mac
+            let mut rpkt = vec![0u8; arp.size()];
+            arp.to_reply(self.mac);
+            arp.as_bytes(&mut rpkt);
+            Ok(RouterAction::Respond(arp.tpa, rpkt))
         } else {
             // TODO: broadcast to all other connected devices
             Ok(RouterAction::Drop(pkt))
         }
     }
 
-    fn route_ip4(
-        &mut self,
-        ef_hdr: EthernetFrame,
-        mut pkt: Vec<u8>,
-    ) -> Result<RouterAction, ProtocolError> {
+    fn route_ip4(&mut self, mut pkt: Vec<u8>) -> Result<RouterAction, ProtocolError> {
         let ip_hdr = Ipv4Header::extract(&mut pkt)?;
         match self.local.can_handle(ip_hdr.dst) {
-            true => Ok(self.local.handle_ip4_packet(ef_hdr, ip_hdr, pkt)),
+            true => Ok(self.local.handle_ip4_packet(ip_hdr, pkt)),
             false => Ok(RouterAction::Forward(ip_hdr, pkt)),
         }
     }
@@ -241,10 +286,11 @@ impl Router {
     /// * `dst` - Destination MAC Address
     /// * `ty` - Type of payload
     /// * `data` - Layer3+ data
-    fn to_device(&mut self, pkt: Vec<u8>) {
+    fn to_device(&mut self, dst: MacAddress, ty: EtherType, pkt: Vec<u8>) {
         self.log_packet(&pkt);
 
-        let dst = MacAddress::parse(&pkt[0..6]).expect("dst mac not found");
+        // build the EF header
+        let frame = EthernetFrame::new(self.mac, dst, ty);
 
         // get the port to send out on
         match self.ports.get(&dst) {
@@ -253,7 +299,7 @@ impl Router {
                 let devs = self.devices.lock();
                 match devs.get(*port) {
                     None => tracing::warn!(?dst, ?port, "no device connected to port"),
-                    Some(dev) => dev.enqueue(pkt),
+                    Some(dev) => dev.enqueue(frame, pkt),
                 }
             }
         }
@@ -266,8 +312,12 @@ impl RouterHandle {
     /// ### Arguments
     /// * `port` - Port device is connected to
     /// * `pkt` - Ethernet-Framed (i.e. Layer 2) packet
-    pub fn route(&self, port: usize, pkt: Vec<u8>) {
-        self.tx.send(RouterMsg::Packet(port - 1, pkt)).ok();
+    pub fn switch(&self, port: usize, pkt: Vec<u8>) {
+        self.tx.send(RouterMsg::L2Packet(port - 1, pkt)).ok();
+    }
+
+    pub fn route(&self, ty: EtherType, pkt: Vec<u8>) {
+        self.tx.send(RouterMsg::L3Packet(ty, pkt)).ok();
     }
 
     /// Registers the provided upstream handle as the default route
@@ -279,32 +329,11 @@ impl RouterHandle {
     }
 
     /// Connects a new device to the router, returning the port it is connected to
-    pub fn connect(&self, queue: TapDeviceRxQueue) -> usize {
+    pub fn connect<P: RouterPort + 'static>(&self, port: P) -> usize {
         let mut devices = self.devices.lock();
         let idx = devices.len();
-        devices.push(queue);
+        devices.push(Box::new(port));
 
         idx + 1
     }
-}
-
-/// Computes the checksum used in various networking protocols
-///
-/// Algorithm is the one's complement of the sum of the data as big-ending u16 values
-///
-/// ### Arguments
-/// * `data` - Data to checksum
-pub fn checksum(data: &[u8]) -> u16 {
-    let mut sum = 0;
-    for b in data.chunks(2) {
-        let lower = b[0];
-        let upper = match b.len() {
-            1 => 0x00,
-            _ => b[1],
-        };
-
-        sum += u32::from_ne_bytes([upper, lower, 0x00, 0x00]);
-    }
-
-    !(((sum & 0xFFFF) + ((sum >> 16) & 0xFF)) as u16)
 }

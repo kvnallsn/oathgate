@@ -17,7 +17,6 @@ use crate::{
     types::{DeviceRxQueue, VirtioNetHeader},
 };
 
-#[derive(Debug)]
 pub struct VirtQueue {
     enabled: bool,
     queue: Queue,
@@ -192,7 +191,7 @@ impl VirtQueue {
             tracing::trace!(?idx, "[kick-tx] header: {hdr:02x?}");
             tracing::trace!(?idx, "[kick-tx] data: {pkt:02x?}");
 
-            self.router.route(router_port, pkt);
+            self.router.switch(router_port, pkt);
 
             self.queue.add_used(mem.deref(), head_idx, len as u32)?;
         }
@@ -241,7 +240,7 @@ impl VirtQueue {
                 }
             };
 
-            let mut pkt = match pending.pop_front() {
+            let pkt = match pending.pop_front() {
                 Some(pkt) => pkt,
                 None => {
                     tracing::debug!("[handle-rx-queued] no more packets...but a non-empty queue");
@@ -249,18 +248,26 @@ impl VirtQueue {
                 }
             };
 
-            let vhdr = VirtioNetHeader::new();
-            let mut data = vhdr.to_vec();
-            data.append(&mut pkt);
 
             let head_idx = chain.head_index();
             tracing::trace!("writing to descriptor chain: {}", head_idx);
-            tracing::trace!("packet: {:02x?}", data);
             let mut writer = chain.writer(mem.deref())?;
-            writer.write_all(&data)?;
+
+            let vhdr = VirtioNetHeader::new().as_bytes();
+            let frame = pkt.frame.to_bytes();
+   
+            // NOTE: write_vectored may be better, but I don't think it's implemented for
+            // the GuestMemory writer.  When tried, it only write the first buffer, which
+            // appears to be the default behavior for the Write trait
+            let sz = vhdr.len() + frame.len() + pkt.payload.len();
+            writer.write_all(&vhdr)?;
+            writer.write_all(&frame)?;
+            writer.write_all(&pkt.payload)?;
+            tracing::trace!("[queue] frame:  {:02x?}", frame);
+            tracing::trace!("[queue] packet: {:02x?}", &pkt.payload);
 
             self.queue
-                .add_used(mem.deref(), head_idx, data.len() as u32)?;
+                .add_used(mem.deref(), head_idx, sz as u32)?;
         }
 
         // notify client

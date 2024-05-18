@@ -3,8 +3,9 @@
 use std::{io::IoSlice, net::{SocketAddr, ToSocketAddrs, UdpSocket}, os::fd::{AsRawFd, RawFd}};
 
 use nix::sys::socket::{sendmsg, MsgFlags, SockaddrIn, SockaddrIn6};
+use oathgate_net::{types::EtherType, Ipv4Header};
 
-use crate::{error::AppResult, router::{protocols::Ipv4Header, RouterHandle}};
+use crate::{error::AppResult, router::RouterHandle};
 
 use super::UpstreamHandle;
 
@@ -46,9 +47,13 @@ impl UdpDevice {
         let mut buf = [0u8; 1600];
         loop {
             let (sz, peer) = self.sock.recv_from(&mut buf)?;
-            tracing::debug!(?peer, "read {sz} bytes from peer");
+            tracing::debug!(?peer, "read {sz} bytes from peer: {:02x?}, {:02x?}", &buf[12..16], &buf[16..20]);
             let pkt = buf[0..sz].to_vec();
-            router.route(0, pkt);
+            match pkt[0] >> 4 {
+                //4 => router.route(EtherType::IPv4, pkt),
+                //6 => router.route(EtherType::IPv6, pkt),
+                version => tracing::warn!(version, "unknown ip version / malformed packet"),
+            }
         }
     }
 }

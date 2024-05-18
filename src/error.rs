@@ -3,6 +3,7 @@
 use std::num::TryFromIntError;
 
 use nix::errno::Errno;
+use oathgate_net::ProtocolError;
 
 /// Helper type for application errors
 pub type AppResult<T> = std::result::Result<T, Error>;
@@ -32,15 +33,6 @@ pub enum MemoryError {
 
     #[error("no mapping from host to guest address found: host address 0x{0:08x}")]
     NoHostToGuestMappingFound(u64),
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum ProtocolError {
-    #[error("not enough data for payload, got = {0}, expected = {1}")]
-    NotEnoughData(usize, usize),
-
-    #[error("malformed packet: {0}")]
-    MalformedPacket(String),
 }
 
 #[derive(thiserror::Error, Debug)]
