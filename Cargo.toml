@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "oathgate",
     "oathgate-net",
     "oathgate-vhost",
     "upstreams/udp-dummy"

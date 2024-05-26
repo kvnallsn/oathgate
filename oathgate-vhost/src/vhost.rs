@@ -5,7 +5,7 @@ use std::{io, path::PathBuf};
 use mio::{net::UnixListener, Events, Interest, Poll, Token};
 use oathgate_net::router::Switch;
 
-use crate::{device::VirtioDevice, DeviceOpts};
+use crate::device::{DeviceOpts, VirtioDevice};
 
 /// An `FdMap` is a map of unique tokens to file descriptors
 pub struct VHostSocket {

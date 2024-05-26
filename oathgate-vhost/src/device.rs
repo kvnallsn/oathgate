@@ -31,7 +31,6 @@ use crate::{
         DeviceRxQueue, GuestMapping, MemoryRegionDescription, VHostHeader,
         VHostUserProtocolFeature, VRingAddr, VRingDescriptor, VRingState, VirtioFeatures,
     },
-    DeviceOpts,
 };
 
 const QUEUE_MAX_SIZE: u16 = 1024;
@@ -117,6 +116,18 @@ pub struct VirtioDevice {
 pub struct VirtioDeviceRxQueue {
     queue: DeviceRxQueue,
     waker: Arc<Waker>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeviceOpts {
+    /// Number of transmit/receive queue pairs to create
+    pub device_queues: u8,
+}
+
+impl Default for DeviceOpts {
+    fn default() -> Self {
+        Self { device_queues: 1 }
+    }
 }
 
 impl VirtioDeviceRxQueue {

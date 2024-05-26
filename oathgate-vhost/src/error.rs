@@ -83,9 +83,6 @@ pub enum Error {
     #[error("queue is disabled")]
     QueueDisabled,
 
-    #[error("no receivers available")]
-    ChannelClosed,
-
     #[error("virtio: {0}")]
     Virtio(#[from] virtio_queue::Error),
 
@@ -94,10 +91,4 @@ pub enum Error {
 
     #[error("router: {0}")]
     Router(#[from] RouterError),
-}
-
-impl<T> From<flume::SendError<T>> for Error {
-    fn from(_value: flume::SendError<T>) -> Self {
-        Self::ChannelClosed
-    }
 }

@@ -1,22 +1,16 @@
 mod config;
-mod device;
-mod error;
-mod queue;
-mod types;
-mod vhost;
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser};
+use clap::Parser;
 use config::Config;
-use error::AppResult;
 use oathgate_net::router::{
     handler::IcmpHandler,
     wan::{TunTap, UdpDevice, Wan, WgDevice},
     Router, Switch,
 };
+use oathgate_vhost::{DeviceOpts, VHostSocket};
 use tracing::Level;
-use vhost::VHostSocket;
 
 use crate::config::WanConfig;
 
@@ -36,19 +30,9 @@ pub(crate) struct Opts {
     /// Control the level of output to stdout (-v, -vv, -vvv)
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
-
-    #[command(flatten)]
-    pub device: DeviceOpts,
 }
 
-#[derive(Args, Clone)]
-pub(crate) struct DeviceOpts {
-    /// Number of transmit/receive queue pairs to create
-    #[arg(long, default_value_t = 1)]
-    pub device_queues: u8,
-}
-
-fn parse_wan(cfg: WanConfig) -> AppResult<Option<Box<dyn Wan>>> {
+fn parse_wan(cfg: WanConfig) -> Result<Option<Box<dyn Wan>>, oathgate_vhost::Error> {
     match cfg {
         WanConfig::Tap(opts) => {
             let wan = TunTap::create_tap(opts.device)?;
@@ -65,7 +49,7 @@ fn parse_wan(cfg: WanConfig) -> AppResult<Option<Box<dyn Wan>>> {
     }
 }
 
-fn run(opts: Opts) -> AppResult<()> {
+fn run(opts: Opts) -> Result<(), oathgate_vhost::Error> {
     let cfg = Config::load(opts.config)?;
     tracing::debug!(?cfg, "configuration");
 
@@ -82,7 +66,7 @@ fn run(opts: Opts) -> AppResult<()> {
         .register_proto_handler(IcmpHandler::default())
         .build(cfg.router.ipv4, switch.clone())?;
 
-    socket.run(opts.device, switch)?;
+    socket.run(DeviceOpts::default(), switch)?;
 
     Ok(())
 }
@@ -102,6 +86,6 @@ fn main() {
         .init();
 
     if let Err(error) = run(opts) {
-        tracing::error!(?error, "unable to run oathgate-vost");
+        tracing::error!(?error, "unable to run oathgate");
     }
 }

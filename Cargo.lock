@@ -562,6 +562,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "oathgate"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "mio",
+ "nix 0.28.0",
+ "oathgate-net",
+ "oathgate-vhost",
+ "serde",
+ "serde_yaml",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "oathgate-net"
 version = "0.1.0"
 dependencies = [
@@ -582,20 +598,13 @@ dependencies = [
 name = "oathgate-vhost"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bitflags 2.5.0",
- "clap",
- "flume",
  "mio",
  "nix 0.28.0",
  "oathgate-net",
  "parking_lot",
- "rand",
- "serde",
- "serde_yaml",
  "thiserror",
  "tracing",
- "tracing-subscriber",
  "virtio-queue",
  "vm-memory",
 ]
