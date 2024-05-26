@@ -5,15 +5,15 @@ use std::{io, path::PathBuf};
 use mio::{net::UnixListener, Events, Interest, Poll, Token};
 use oathgate_net::router::Switch;
 
-use crate::{device::TapDevice, DeviceOpts};
+use crate::{device::VirtioDevice, DeviceOpts};
 
 /// An `FdMap` is a map of unique tokens to file descriptors
-pub struct EventPoller {
+pub struct VHostSocket {
     socket_path: PathBuf,
     poll: Poll,
 }
 
-impl EventPoller {
+impl VHostSocket {
     /// Creates a new, empty FdMap
     pub fn new<P: Into<PathBuf>>(path: P) -> io::Result<Self> {
         let socket_path = path.into();
@@ -46,7 +46,7 @@ impl EventPoller {
                         let (strm, peer) = listener.accept()?;
                         tracing::info!(?peer, "accepted unix connection");
 
-                        match TapDevice::new(switch.clone(), device_opts.clone()) {
+                        match VirtioDevice::new(switch.clone(), device_opts.clone()) {
                             Ok(dev) => match dev.spawn(strm) {
                                 Ok(_) => tracing::trace!("spawned device thread"),
                                 Err(error) => {

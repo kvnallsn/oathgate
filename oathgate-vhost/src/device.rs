@@ -1,5 +1,3 @@
-mod poller;
-
 use std::{
     collections::{HashMap, VecDeque},
     fs::File,
@@ -19,8 +17,9 @@ use nix::{
     },
     unistd,
 };
-use oathgate_net::{EthernetFrame, EthernetPacket, 
+use oathgate_net::{
     router::{RouterPort, Switch},
+    EthernetFrame, EthernetPacket,
 };
 use parking_lot::lock_api::Mutex;
 use vm_memory::{GuestAddress, GuestMemoryAtomic, GuestMemoryMmap, GuestRegionMmap, MmapRegion};
@@ -34,8 +33,6 @@ use crate::{
     },
     DeviceOpts,
 };
-
-pub use self::poller::EventPoller;
 
 const QUEUE_MAX_SIZE: u16 = 1024;
 
@@ -88,9 +85,9 @@ pub enum KickFd {
     Tx(RawFd, usize),
 }
 
-/// A TapDevice is the Virio device that will respond to the virtio-host-net driver
+/// A VirtioDevice is the Virio device that will respond to the virtio-host-net driver
 /// running in the Qemu VM.
-pub struct TapDevice {
+pub struct VirtioDevice {
     /// Instance of mio poller
     poll: Poll,
 
@@ -117,19 +114,19 @@ pub struct TapDevice {
 }
 
 #[derive(Clone, Debug)]
-pub struct TapDeviceRxQueue {
+pub struct VirtioDeviceRxQueue {
     queue: DeviceRxQueue,
     waker: Arc<Waker>,
 }
 
-impl TapDeviceRxQueue {
+impl VirtioDeviceRxQueue {
     /// Returns a handle to the underlying packet queue
     pub fn queue(&self) -> DeviceRxQueue {
         Arc::clone(&self.queue)
     }
 }
 
-impl RouterPort for TapDeviceRxQueue {
+impl RouterPort for VirtioDeviceRxQueue {
     /// Puts a packet into the queue and notifies the device
     ///
     /// ### Arguments
@@ -142,15 +139,15 @@ impl RouterPort for TapDeviceRxQueue {
     }
 }
 
-impl TapDevice {
-    /// Creates a new TapDevice with the requested number of tx/rx virtqueue pairs
+impl VirtioDevice {
+    /// Creates a new VirtioDevice with the requested number of tx/rx virtqueue pairs
     ///
     /// ### Arguments
     /// * `num_queues` - Number of trasmit/receive virtqueue pairs for thsi device
     pub fn new(switch: Switch, opts: DeviceOpts) -> AppResult<Self> {
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), TOKEN_WAKE)?;
-        let rx = TapDeviceRxQueue {
+        let rx = VirtioDeviceRxQueue {
             queue: Arc::new(Mutex::new(VecDeque::new())),
             waker: Arc::new(waker),
         };

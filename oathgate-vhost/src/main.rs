@@ -3,12 +3,12 @@ mod device;
 mod error;
 mod queue;
 mod types;
+mod vhost;
 
 use std::path::PathBuf;
 
 use clap::{Args, Parser};
 use config::Config;
-use device::EventPoller;
 use error::AppResult;
 use oathgate_net::router::{
     handler::IcmpHandler,
@@ -16,6 +16,7 @@ use oathgate_net::router::{
     Router, Switch,
 };
 use tracing::Level;
+use vhost::VHostSocket;
 
 use crate::config::WanConfig;
 
@@ -68,7 +69,7 @@ fn run(opts: Opts) -> AppResult<()> {
     let cfg = Config::load(opts.config)?;
     tracing::debug!(?cfg, "configuration");
 
-    let mut poller = EventPoller::new(opts.socket)?;
+    let mut socket = VHostSocket::new(opts.socket)?;
 
     let switch = Switch::new(opts.pcap)?;
 
@@ -81,7 +82,7 @@ fn run(opts: Opts) -> AppResult<()> {
         .register_proto_handler(IcmpHandler::default())
         .build(cfg.router.ipv4, switch.clone())?;
 
-    poller.run(opts.device, switch)?;
+    socket.run(opts.device, switch)?;
 
     Ok(())
 }
