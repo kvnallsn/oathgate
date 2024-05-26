@@ -9,18 +9,10 @@ pub const ICMP_TY_ECHO_REQUEST: u8 = 8;
 
 #[derive(Debug)]
 pub enum IcmpType {
-    EchoReply {
-        id: u16,
-        seq: u16,
-        data: Vec<u8>
-    },
+    EchoReply { id: u16, seq: u16, data: Vec<u8> },
     DestinationUnreachable(DestinationUnreachableCode, [u8; 28]),
     Redirect,
-    EchoRequest {
-        id: u16,
-        seq: u16,
-        data: Vec<u8>
-    },
+    EchoRequest { id: u16, seq: u16, data: Vec<u8> },
 }
 
 #[derive(Debug)]
@@ -40,7 +32,7 @@ pub enum DestinationUnreachableCode {
     HostUnreachableToS,
     CommAdminProhibited,
     HostPrecedenceViolation,
-    PrecedenceCutoff
+    PrecedenceCutoff,
 }
 
 impl IcmpType {
@@ -51,7 +43,7 @@ impl IcmpType {
                 let ty: u16 = 3;
                 let code: u16 = code.as_u8().into();
                 (ty << 8) | code
-            },
+            }
             Self::Redirect => 5,
             Self::EchoRequest { .. } => 8,
         }
@@ -76,7 +68,7 @@ impl DestinationUnreachableCode {
             DestinationUnreachableCode::HostUnreachableToS => 12,
             DestinationUnreachableCode::CommAdminProhibited => 13,
             DestinationUnreachableCode::HostPrecedenceViolation => 14,
-            DestinationUnreachableCode::PrecedenceCutoff => 15
+            DestinationUnreachableCode::PrecedenceCutoff => 15,
         }
     }
 }
@@ -94,11 +86,17 @@ impl IcmpPacket {
         todo!("implement this")
     }
 
-    pub fn destination_unreachable(code: DestinationUnreachableCode, hdr: &Ipv4Header, payload: &[u8]) -> Self {
+    pub fn destination_unreachable(
+        code: DestinationUnreachableCode,
+        hdr: &Ipv4Header,
+        payload: &[u8],
+    ) -> Self {
         let mut buf = [0u8; 28];
         hdr.as_bytes(&mut buf);
         buf[20..28].copy_from_slice(&payload[0..8]);
-        Self { ty: IcmpType::DestinationUnreachable(code, buf) }
+        Self {
+            ty: IcmpType::DestinationUnreachable(code, buf),
+        }
     }
 
     pub fn parse(data: &[u8]) -> Result<Self, ProtocolError> {
@@ -111,15 +109,19 @@ impl IcmpPacket {
                 let id = u16::from_be_bytes([data[4], data[5]]);
                 let seq = u16::from_be_bytes([data[6], data[7]]);
                 let data = data[8..].to_vec();
-                Ok(IcmpPacket { ty: IcmpType::EchoReply { id, seq, data } })
+                Ok(IcmpPacket {
+                    ty: IcmpType::EchoReply { id, seq, data },
+                })
             }
             ICMP_TY_ECHO_REQUEST => {
                 let id = u16::from_be_bytes([data[4], data[5]]);
                 let seq = u16::from_be_bytes([data[6], data[7]]);
                 let data = data[8..].to_vec();
-                Ok(IcmpPacket { ty: IcmpType::EchoRequest { id, seq, data } })
+                Ok(IcmpPacket {
+                    ty: IcmpType::EchoRequest { id, seq, data },
+                })
             }
-            _ => todo!()
+            _ => todo!(),
         }
     }
 
@@ -137,7 +139,7 @@ impl IcmpPacket {
                 let csum = checksum(&buf[0..end]);
                 buf[2..4].copy_from_slice(&csum.to_be_bytes());
                 end
-            },
+            }
             IcmpType::EchoReply { id, seq, data } => {
                 let end = 8 + data.len();
                 buf[0] = ICMP_TY_ECHO_REPLY;
@@ -150,7 +152,7 @@ impl IcmpPacket {
                 let csum = checksum(&buf[0..end]);
                 buf[2..4].copy_from_slice(&csum.to_be_bytes());
                 end
-            },
+            }
             IcmpType::Redirect => 0,
             IcmpType::DestinationUnreachable(code, data) => {
                 buf[0] = ICMP_TY_DESTINATION_UNREACHABLE;

@@ -2,7 +2,11 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use crate::{cast, types::{EtherType, MacAddress}, ProtocolError};
+use crate::{
+    cast,
+    types::{EtherType, MacAddress},
+    ProtocolError,
+};
 
 const ARP4_PKT_SIZE: usize = 28;
 const ARP6_PKT_SIZE: usize = 52;

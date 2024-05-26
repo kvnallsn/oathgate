@@ -11,10 +11,20 @@ use clap::{Args, Parser};
 use config::Config;
 use device::EventPoller;
 use error::AppResult;
-use router::{wan::{Wan, WgDevice}, Router};
+use router::{
+    wan::{Wan, WgDevice},
+    Router,
+};
 use tracing::Level;
 
-use crate::{config::WanConfig, router::{handler::IcmpHandler, wan::{TunTap, UdpDevice}, Switch}};
+use crate::{
+    config::WanConfig,
+    router::{
+        handler::IcmpHandler,
+        wan::{TunTap, UdpDevice},
+        Switch,
+    },
+};
 
 #[derive(Parser)]
 pub(crate) struct Opts {

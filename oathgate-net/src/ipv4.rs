@@ -4,7 +4,11 @@ use std::net::Ipv4Addr;
 
 use rand::Rng;
 
-use crate::{cast, ph_checksum, protocols::{NET_PROTOCOL_TCP, NET_PROTOCOL_UDP}, ProtocolError};
+use crate::{
+    cast, ph_checksum,
+    protocols::{NET_PROTOCOL_TCP, NET_PROTOCOL_UDP},
+    ProtocolError,
+};
 
 /// Represents the Ipv4 header
 #[derive(Debug)]
