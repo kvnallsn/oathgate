@@ -1,0 +1,27 @@
+[package]
+name = "oathgate-vhost"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = "0.22.1"
+bitflags = "2.5.0"
+boringtun = "0.6.0"
+clap = { workspace = true }
+flume = { version = "0.11.0", default-features = false, features = ["eventual-fairness"] }
+mio = { version = "0.8.11", features = ["net", "os-poll", "os-ext"] }
+nix = { version = "0.28.0", features = ["socket", "uio", "mman", "ioctl", "net", "time"] }
+oathgate-net = { path = "../oathgate-net" }
+parking_lot = "0.12.2"
+pcap-file = "2.0.0"
+rand = { workspace =  true }
+serde = { version = "1.0.201", features = ["derive"] }
+serde_yaml = "0.9.34"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+virtio-queue = "0.12.0"
+vm-memory = { version = "0.14.1", features = ["backend-mmap", "backend-atomic"] }

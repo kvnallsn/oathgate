@@ -4,7 +4,7 @@ use std::{io, path::PathBuf};
 
 use mio::{net::UnixListener, Events, Interest, Poll, Token};
 
-use crate::{device::TapDevice, router::RouterHandle, DeviceOpts};
+use crate::{device::TapDevice, router::Switch, DeviceOpts};
 
 /// An `FdMap` is a map of unique tokens to file descriptors
 pub struct EventPoller {
@@ -24,7 +24,7 @@ impl EventPoller {
         Ok(Self { socket_path, poll })
     }
 
-    pub fn run(&mut self, device_opts: DeviceOpts, router: RouterHandle) -> io::Result<()> {
+    pub fn run(&mut self, device_opts: DeviceOpts, switch: Switch) -> io::Result<()> {
         let mut listener = UnixListener::bind(&self.socket_path)?;
         let listener_token = Token(0);
         self.poll
@@ -43,11 +43,11 @@ impl EventPoller {
                 match token {
                     token if token == listener_token => {
                         let (strm, peer) = listener.accept()?;
-                        tracing::debug!(?peer, "accepted unix connection");
+                        tracing::info!(?peer, "accepted unix connection");
 
-                        match TapDevice::new(router.clone(), device_opts.clone()) {
+                        match TapDevice::new(switch.clone(), device_opts.clone()) {
                             Ok(dev) => match dev.spawn(strm) {
-                                Ok(_) => tracing::debug!("spawned device thread"),
+                                Ok(_) => tracing::trace!("spawned device thread"),
                                 Err(error) => {
                                     tracing::warn!(?error, "unable to spawn device thread")
                                 }
@@ -55,7 +55,7 @@ impl EventPoller {
                             Err(error) => tracing::warn!(?error, "unable to create tap device"),
                         }
                     }
-                    Token(token) => tracing::debug!(?token, "[poller] unknown mio token"),
+                    Token(token) => tracing::trace!(?token, "[poller] unknown mio token"),
                 }
             }
         }

@@ -4,7 +4,6 @@ mod error;
 mod queue;
 mod router;
 mod types;
-mod upstream;
 
 use std::path::PathBuf;
 
@@ -12,13 +11,10 @@ use clap::{Args, Parser};
 use config::Config;
 use device::EventPoller;
 use error::AppResult;
-use router::Router;
+use router::{wan::{Wan, WgDevice}, Router};
 use tracing::Level;
 
-use crate::{
-    config::UpstreamConfig,
-    upstream::{Tun, UdpDevice},
-};
+use crate::{config::WanConfig, router::{handler::IcmpHandler, wan::{TunTap, UdpDevice}, Switch}};
 
 #[derive(Parser)]
 pub(crate) struct Opts {
@@ -48,29 +44,41 @@ pub(crate) struct DeviceOpts {
     pub device_queues: u8,
 }
 
+fn parse_wan(cfg: WanConfig) -> AppResult<Option<Box<dyn Wan>>> {
+    match cfg {
+        WanConfig::Tap(opts) => {
+            let wan = TunTap::create_tap(opts.device)?;
+            Ok(Some(Box::new(wan)))
+        }
+        WanConfig::Udp(opts) => {
+            let wan = UdpDevice::connect(opts.endpoint)?;
+            Ok(Some(Box::new(wan)))
+        }
+        WanConfig::Wireguard(opts) => {
+            let wan = WgDevice::create(opts)?;
+            Ok(Some(Box::new(wan)))
+        }
+    }
+}
+
 fn run(opts: Opts) -> AppResult<()> {
     let cfg = Config::load(opts.config)?;
     tracing::debug!(?cfg, "configuration");
 
     let mut poller = EventPoller::new(opts.socket)?;
 
-    // spawn thread to receive messages/packets
-    let router = Router::builder().pcap(opts.pcap).build(cfg.router.ipv4)?;
+    let switch = Switch::new(opts.pcap)?;
 
     // spawn the default route / upstream
-    match cfg.upstream {
-        UpstreamConfig::Tap(opts) => {
-            let upstream = Tun::create(opts.device)?;
-            upstream.spawn(router.clone())?;
-        }
-        UpstreamConfig::Udp(opts) => {
-            let upstream = UdpDevice::connect(opts.endpoint)?;
-            upstream.spawn(router.clone())?;
-        }
-        UpstreamConfig::Wireguard(_opts) => (),
-    }
+    let wan = parse_wan(cfg.wan)?;
 
-    poller.run(opts.device, router)?;
+    // spawn thread to receive messages/packets
+    let _router = Router::builder()
+        .wan(wan)
+        .register_proto_handler(IcmpHandler::default())
+        .build(cfg.router.ipv4, switch.clone())?;
+
+    poller.run(opts.device, switch)?;
 
     Ok(())
 }

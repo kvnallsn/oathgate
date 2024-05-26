@@ -13,7 +13,7 @@ use vm_memory::{GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap};
 
 use crate::{
     error::{AppResult, Error, MemoryError},
-    router::RouterHandle,
+    router::Switch,
     types::{DeviceRxQueue, VirtioNetHeader},
 };
 
@@ -27,7 +27,7 @@ pub struct VirtQueue {
     err_fd: Option<RawFd>,
     call_fd: Option<File>,
     kick_fd: Option<RawFd>,
-    router: RouterHandle,
+    switch: Switch,
     pending: DeviceRxQueue,
 }
 
@@ -38,7 +38,7 @@ impl VirtQueue {
     /// * `max_size` - Maximum size of the virtqueue
     pub fn new(
         max_size: u16,
-        router: RouterHandle,
+        switch: Switch,
         rx_queue: DeviceRxQueue,
     ) -> Result<Self, virtio_queue::Error> {
         Ok(Self {
@@ -51,7 +51,7 @@ impl VirtQueue {
             err_fd: None,
             call_fd: None,
             kick_fd: None,
-            router,
+            switch,
             pending: rx_queue,
         })
     }
@@ -158,8 +158,8 @@ impl VirtQueue {
     ///
     /// ### Arguments
     /// * `pkt` - data from kick file descriptor
-    /// * `router_port` - Port device is connected to on the router
-    pub fn kick_tx(&mut self, pkt: &[u8], router_port: usize) -> AppResult<()> {
+    /// * `switch_port` - Port device is connected to on the switch
+    pub fn kick_tx(&mut self, pkt: &[u8], switch_port: usize) -> AppResult<()> {
         let enabled = crate::cast!(u64, pkt[0..8]);
         if enabled == 0 {
             tracing::warn!(fd = ?self.kick_fd, "virtqueue not enabled, ignore kick");
@@ -191,7 +191,7 @@ impl VirtQueue {
             tracing::trace!(?idx, "[kick-tx] header: {hdr:02x?}");
             tracing::trace!(?idx, "[kick-tx] data: {pkt:02x?}");
 
-            self.router.switch(router_port, pkt);
+            self.switch.process(switch_port, pkt)?;
 
             self.queue.add_used(mem.deref(), head_idx, len as u32)?;
         }
@@ -243,11 +243,10 @@ impl VirtQueue {
             let pkt = match pending.pop_front() {
                 Some(pkt) => pkt,
                 None => {
-                    tracing::debug!("[handle-rx-queued] no more packets...but a non-empty queue");
+                    tracing::warn!("[handle-rx-queued] no more packets...but a non-empty queue");
                     break;
                 }
             };
-
 
             let head_idx = chain.head_index();
             tracing::trace!("writing to descriptor chain: {}", head_idx);
@@ -255,7 +254,7 @@ impl VirtQueue {
 
             let vhdr = VirtioNetHeader::new().as_bytes();
             let frame = pkt.frame.to_bytes();
-   
+
             // NOTE: write_vectored may be better, but I don't think it's implemented for
             // the GuestMemory writer.  When tried, it only write the first buffer, which
             // appears to be the default behavior for the Write trait
@@ -266,8 +265,7 @@ impl VirtQueue {
             tracing::trace!("[queue] frame:  {:02x?}", frame);
             tracing::trace!("[queue] packet: {:02x?}", &pkt.payload);
 
-            self.queue
-                .add_used(mem.deref(), head_idx, sz as u32)?;
+            self.queue.add_used(mem.deref(), head_idx, sz as u32)?;
         }
 
         // notify client

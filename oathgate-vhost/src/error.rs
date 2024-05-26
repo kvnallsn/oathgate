@@ -56,6 +56,7 @@ pub enum UpstreamError {
     CreateFailed(String),
 }
 
+/// Oathgate Error Type
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("error: {0}")]
@@ -102,6 +103,12 @@ pub enum Error {
 
     #[error("upstream: {0}")]
     Upstream(#[from] UpstreamError),
+
+    #[error("unable to decode slice: {0}")]
+    Base64(#[from] base64::DecodeSliceError),
+
+    #[error("{0}")]
+    General(String),
 }
 
 impl<T> From<flume::SendError<T>> for Error {

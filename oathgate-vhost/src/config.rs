@@ -11,14 +11,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
-    pub upstream: UpstreamConfig,
+    pub wan: WanConfig,
     pub router: RouterConfig,
     pub virtio: VirtioConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum UpstreamConfig {
+pub enum WanConfig {
     Tap(TapConfig),
     Udp(UdpConfig),
     Wireguard(WgConfig),

@@ -26,7 +26,7 @@ use vm_memory::{GuestAddress, GuestMemoryAtomic, GuestMemoryMmap, GuestRegionMma
 use crate::{
     error::{AppResult, Error, MemoryError, PayloadError},
     queue::VirtQueue,
-    router::{RouterHandle, RouterPort},
+    router::{RouterPort, Switch},
     types::{
         DeviceRxQueue, GuestMapping, MemoryRegionDescription, VHostHeader,
         VHostUserProtocolFeature, VRingAddr, VRingDescriptor, VRingState, VirtioFeatures,
@@ -129,7 +129,6 @@ impl TapDeviceRxQueue {
 }
 
 impl RouterPort for TapDeviceRxQueue {
-
     /// Puts a packet into the queue and notifies the device
     ///
     /// ### Arguments
@@ -147,7 +146,7 @@ impl TapDevice {
     ///
     /// ### Arguments
     /// * `num_queues` - Number of trasmit/receive virtqueue pairs for thsi device
-    pub fn new(router: RouterHandle, opts: DeviceOpts) -> AppResult<Self> {
+    pub fn new(switch: Switch, opts: DeviceOpts) -> AppResult<Self> {
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), TOKEN_WAKE)?;
         let rx = TapDeviceRxQueue {
@@ -162,10 +161,10 @@ impl TapDevice {
 
         let mut queues = Vec::with_capacity(txrx_queues);
         for _ in 0..txrx_queues {
-            queues.push(VirtQueue::new(QUEUE_MAX_SIZE, router.clone(), rx.queue())?);
+            queues.push(VirtQueue::new(QUEUE_MAX_SIZE, switch.clone(), rx.queue())?);
         }
 
-        let router_port = router.connect(rx);
+        let router_port = switch.connect(rx);
 
         Ok(Self {
             poll,
@@ -239,7 +238,7 @@ impl TapDevice {
                             let vq = self.get_virtqueue_mut(*vq)?;
                             vq.kick_tx(&pkt, port)?;
                         }
-                        None => tracing::debug!(?token, "[device] unknown mio token"),
+                        None => tracing::trace!(?token, "[device] unknown mio token"),
                     },
                 }
             }
@@ -315,7 +314,7 @@ impl TapDevice {
                 // Feature bit VHOST_USER_F_PROTOCOL_FEATURES signals back-end support for
                 // VHOST_USER_GET_PROTOCOL_FEATURES and VHOST_USER_SET_PROTOCOL_FEATURES.
                 let features: u64 = hdr.payload()?;
-                tracing::debug!("[set-features] 0x{:08x}", features);
+                tracing::trace!("[set-features] 0x{:08x}", features);
             }
             VHOST_USER_GET_PROTOCOL_FEATURES => {
                 // Request Type: None
@@ -367,7 +366,7 @@ impl TapDevice {
                 //
                 // Set the socket file descriptor for back-end initiated requests
                 let fd = hdr.extract_fd()?;
-                tracing::debug!("[set-backend-fd] {fd:?}");
+                tracing::trace!("[set-backend-fd] {fd:?}");
                 let file = unsafe { File::from_raw_fd(fd) };
                 self.channel = Some(file);
 
@@ -410,7 +409,7 @@ impl TapDevice {
                 // Issued when a new connection is established. It marks the sender as the
                 // front-end that owns of the session. This can be used on the back-end as
                 // a “session start” flag.
-                tracing::debug!("[set-owner] starting session");
+                tracing::trace!("[set-owner] starting session");
                 self.send_msg(VHOST_USER_BACKEND_CONFIG_CHANGE_MSG, &[])?;
             }
             VHOST_USER_SET_VRING_CALL => {
@@ -468,7 +467,7 @@ impl TapDevice {
                 //
                 // Receives updated device status as defined in the Virtio specification.
                 self.status = hdr.payload()?;
-                tracing::debug!("[set-status] 0x{:08x}", self.status);
+                tracing::trace!("[set-status] 0x{:08x}", self.status);
             }
             VHOST_USER_GET_STATUS => {
                 // Request Type: None
@@ -513,19 +512,19 @@ impl TapDevice {
                 let avail = self.compute_guest_address(addr.avail_user_addr)?;
                 let used = self.compute_guest_address(addr.used_user_addr)?;
 
-                tracing::debug!(
+                tracing::trace!(
                     "[vring][{:02x}] desc table address: 0x{:08x} -> 0x{:08x}",
                     addr.index,
                     desc,
                     addr.desc_user_addr,
                 );
-                tracing::debug!(
+                tracing::trace!(
                     "[vring][{:02x}] avail ring address: 0x{:08x} -> 0x{:08x}",
                     addr.index,
                     avail,
                     addr.avail_user_addr,
                 );
-                tracing::debug!(
+                tracing::trace!(
                     "[vring][{:02x}] used ring address: 0{:08x} -> 0x{:08x}",
                     addr.index,
                     used,
@@ -553,7 +552,7 @@ impl TapDevice {
                 // Consequently, the payload type is specific to the type of virt queue (a vring descriptor
                 // index for split virtqueues vs. vring descriptor indices for packed virtqueues).
                 let base: VRingDescriptor = hdr.payload()?;
-                tracing::debug!(
+                tracing::trace!(
                     "[vring][{:02x}] set next avail ring descriptor index to {}",
                     base.index,
                     base.avail
@@ -586,7 +585,7 @@ impl TapDevice {
                 //
                 // The request payload’s num field is currently reserved and must be set to 0.
                 let state: VRingState = hdr.payload()?;
-                tracing::debug!("[vring][{:02x}] stopping", state.index);
+                tracing::trace!("[vring][{:02x}] stopping", state.index);
 
                 let ((kick, _call, _err), next) = {
                     let vq = self.get_virtqueue_mut(state.index as usize)?;
@@ -621,7 +620,7 @@ impl TapDevice {
                 // This signals that polling should be used instead of waiting for the kick
                 let vring_idx: u64 = hdr.payload()?;
                 let fd = hdr.extract_fd()?;
-                tracing::debug!("[vring][{vring_idx:02x}] starting");
+                tracing::trace!("[vring][{vring_idx:02x}] starting");
 
                 let vring = self.get_virtqueue_mut(vring_idx as usize)?;
                 vring.set_kick_fd(fd);
@@ -655,12 +654,12 @@ impl TapDevice {
 
                 let mut regions = Vec::with_capacity(region_descs.len());
                 for (region, fd) in region_descs.iter().zip(files) {
-                    tracing::debug!(
+                    tracing::trace!(
                         "[set-mem-table] guest address: 0x{:08x} -> 0x{:08x}",
                         region.guest_address,
                         region.guest_address + region.size,
                     );
-                    tracing::debug!(
+                    tracing::trace!(
                         "[set-mem-table] host address: 0x{:08x} -> 0x{:08x}",
                         region.user_address,
                         region.user_address + region.size,
@@ -725,7 +724,7 @@ impl TapDevice {
                 //
                 // Exactly one file descriptor from which the memory is mapped is passed in the ancillary data.
                 let mem: VRingAddr = hdr.payload()?;
-                tracing::debug!(?mem, "adding user memory register");
+                tracing::trace!(?mem, "adding user memory register");
             }
             VHOST_USER_GET_CONFIG => {
                 // Request Type: Device Config
@@ -736,7 +735,7 @@ impl TapDevice {
                 // Fetch the contents of the virtio device configuration space, vhost-user back-end’s
                 // payload size MUST match the front-end’s request, vhost-user back-end uses zero
                 // length of payload to indicate an error to the vhost-user front-end
-                tracing::debug!("[get-config]: {hdr:x?}");
+                tracing::trace!("[get-config]: {hdr:x?}");
             }
             VHOST_USER_SET_CONFIG => {
                 // Request Type: Device Config
@@ -749,7 +748,7 @@ impl TapDevice {
                 // host. The vhost-user back-end must check the flags field, and back-ends MUST NOT
                 // accept SET_CONFIG for read-only configuration space fields unless the live migration
                 // bit is set.
-                tracing::debug!("[set-config]: {hdr:x?}");
+                tracing::trace!("[set-config]: {hdr:x?}");
             }
             _ => tracing::warn!(?hdr, "unhandled request type"),
         }
@@ -766,7 +765,7 @@ impl TapDevice {
             resp[8..12].copy_from_slice(&payload_sz.to_le_bytes());
             resp[12..].copy_from_slice(&payload);
 
-            tracing::debug!(?resp, "sending msg");
+            tracing::trace!(?resp, "sending msg");
             unistd::write(f, &resp)?;
         } else {
             tracing::warn!("[send-msg] backend fd not set");
