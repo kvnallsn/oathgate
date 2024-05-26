@@ -565,7 +565,15 @@ dependencies = [
 name = "oathgate-net"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "boringtun",
+ "flume",
+ "mio",
+ "nix 0.28.0",
+ "parking_lot",
+ "pcap-file",
  "rand",
+ "serde",
  "thiserror",
  "tracing",
 ]
@@ -575,16 +583,13 @@ name = "oathgate-vhost"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "bitflags 2.5.0",
- "boringtun",
  "clap",
  "flume",
  "mio",
  "nix 0.28.0",
  "oathgate-net",
  "parking_lot",
- "pcap-file",
  "rand",
  "serde",
  "serde_yaml",

@@ -1,15 +1,14 @@
 //! UDP upstream.  Forwards traffic to a specific UDP port
 
 use std::{
-    io::IoSlice,
+    io::{self, IoSlice},
     net::{SocketAddr, ToSocketAddrs, UdpSocket},
     os::fd::{AsRawFd, RawFd},
 };
 
 use nix::sys::socket::{sendmsg, MsgFlags, SockaddrIn, SockaddrIn6};
-use oathgate_net::Ipv4Packet;
 
-use crate::{error::AppResult, router::RouterHandle};
+use crate::{Ipv4Packet, router::{RouterError, RouterHandle}};
 
 use super::{Wan, WanHandle};
 
@@ -24,7 +23,7 @@ pub struct UdpDeviceHandle {
 }
 
 impl UdpDevice {
-    pub fn connect<A: ToSocketAddrs>(addrs: A) -> AppResult<Self> {
+    pub fn connect<A: ToSocketAddrs>(addrs: A) -> io::Result<Self> {
         let sock = UdpSocket::bind("0.0.0.0:0")?;
         let dests = addrs.to_socket_addrs()?.collect::<Vec<_>>();
         Ok(Self { sock, dests })
@@ -35,7 +34,7 @@ impl Wan for UdpDevice
 where
     Self: Sized,
 {
-    fn as_wan_handle(&self) -> AppResult<Box<dyn WanHandle>> {
+    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, RouterError> {
         let handle = UdpDeviceHandle {
             sock: self.sock.as_raw_fd(),
             dests: self.dests.clone(),
@@ -44,7 +43,7 @@ where
         Ok(Box::new(handle))
     }
 
-    fn run(self: Box<Self>, router: RouterHandle) -> AppResult<()> {
+    fn run(self: Box<Self>, router: RouterHandle) -> Result<(), RouterError> {
         let mut buf = [0u8; 1600];
         loop {
             let (sz, peer) = self.sock.recv_from(&mut buf)?;
@@ -63,7 +62,7 @@ where
 }
 
 impl WanHandle for UdpDeviceHandle {
-    fn write(&self, pkt: Ipv4Packet) -> AppResult<()> {
+    fn write(&self, pkt: Ipv4Packet) -> Result<(), RouterError> {
         let iov = [IoSlice::new(&pkt.as_bytes())];
 
         for dest in &self.dests {

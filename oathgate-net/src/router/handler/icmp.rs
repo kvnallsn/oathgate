@@ -1,15 +1,11 @@
 //! ICMP Protocol Handler
 
-use oathgate_net::{
-    checksum,
-    protocols::{
+use crate::{
+    checksum, protocols::{
         icmp::{ICMP_HDR_SZ, ICMP_TY_ECHO_REPLY, ICMP_TY_ECHO_REQUEST},
         NET_PROTOCOL_ICMP,
-    },
-    Ipv4Packet,
+    }, Ipv4Packet, ProtocolError
 };
-
-use crate::error::{AppResult, PayloadError};
 
 use super::ProtocolHandler;
 
@@ -21,11 +17,11 @@ impl ProtocolHandler for IcmpHandler {
         NET_PROTOCOL_ICMP
     }
 
-    fn handle_protocol(&self, pkt: &Ipv4Packet, buf: &mut [u8]) -> AppResult<usize> {
+    fn handle_protocol(&self, pkt: &Ipv4Packet, buf: &mut [u8]) -> Result<usize, ProtocolError> {
         let payload = pkt.payload();
 
         if payload.len() < ICMP_HDR_SZ {
-            return Err(PayloadError::NotEnoughData(payload.len(), ICMP_HDR_SZ))?;
+            return Err(ProtocolError::NotEnoughData(payload.len(), ICMP_HDR_SZ))?;
         }
 
         match payload[0] {

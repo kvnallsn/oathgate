@@ -19,14 +19,15 @@ use nix::{
     },
     unistd,
 };
-use oathgate_net::{EthernetFrame, EthernetPacket};
+use oathgate_net::{EthernetFrame, EthernetPacket, 
+    router::{RouterPort, Switch},
+};
 use parking_lot::lock_api::Mutex;
 use vm_memory::{GuestAddress, GuestMemoryAtomic, GuestMemoryMmap, GuestRegionMmap, MmapRegion};
 
 use crate::{
     error::{AppResult, Error, MemoryError, PayloadError},
     queue::VirtQueue,
-    router::{RouterPort, Switch},
     types::{
         DeviceRxQueue, GuestMapping, MemoryRegionDescription, VHostHeader,
         VHostUserProtocolFeature, VRingAddr, VRingDescriptor, VRingState, VirtioFeatures,

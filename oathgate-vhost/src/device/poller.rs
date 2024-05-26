@@ -3,8 +3,9 @@
 use std::{io, path::PathBuf};
 
 use mio::{net::UnixListener, Events, Interest, Poll, Token};
+use oathgate_net::router::Switch;
 
-use crate::{device::TapDevice, router::Switch, DeviceOpts};
+use crate::{device::TapDevice, DeviceOpts};
 
 /// An `FdMap` is a map of unique tokens to file descriptors
 pub struct EventPoller {

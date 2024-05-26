@@ -5,13 +5,12 @@ use std::{
 };
 
 use flume::Sender;
-use oathgate_net::{types::MacAddress, EthernetFrame, ProtocolError};
 use parking_lot::RwLock;
 use pcap_file::pcap::{PcapPacket, PcapWriter};
 
-use crate::error::{AppResult, Error};
+use crate::{types::MacAddress, EthernetFrame, ProtocolError};
 
-use super::{RouterPort, ETHERNET_HDR_SZ};
+use super::{RouterError, RouterPort, ETHERNET_HDR_SZ};
 
 #[derive(Clone, Default)]
 pub struct Switch {
@@ -32,7 +31,7 @@ struct PcapLogger {
 
 impl Switch {
     /// Creates a new, empty switch with no ports connected
-    pub fn new(pcap: Option<PathBuf>) -> AppResult<Self> {
+    pub fn new(pcap: Option<PathBuf>) -> Result<Self, RouterError> {
         let logger = PcapLogger::new(pcap)?;
         Ok(Self {
             logger,
@@ -119,7 +118,7 @@ impl Switch {
 }
 
 impl PcapLogger {
-    pub fn new(path: Option<PathBuf>) -> AppResult<Self> {
+    pub fn new(path: Option<PathBuf>) -> Result<Self, RouterError> {
         match path {
             Some(path) => {
                 let tx = Self::spawn(path)?;
@@ -129,10 +128,10 @@ impl PcapLogger {
         }
     }
 
-    fn spawn(path: PathBuf) -> AppResult<Sender<Vec<u8>>> {
+    fn spawn(path: PathBuf) -> Result<Sender<Vec<u8>>, RouterError> {
         let file = File::options().create(true).write(true).open(path)?;
 
-        let mut writer = PcapWriter::new(file).map_err(|err| Error::General(err.to_string()))?;
+        let mut writer = PcapWriter::new(file)?;
         let (tx, rx) = flume::unbounded::<Vec<u8>>();
         //let logger = Self { writer };
 

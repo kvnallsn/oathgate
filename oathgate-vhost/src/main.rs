@@ -2,7 +2,6 @@ mod config;
 mod device;
 mod error;
 mod queue;
-mod router;
 mod types;
 
 use std::path::PathBuf;
@@ -11,20 +10,14 @@ use clap::{Args, Parser};
 use config::Config;
 use device::EventPoller;
 use error::AppResult;
-use router::{
-    wan::{Wan, WgDevice},
-    Router,
+use oathgate_net::router::{
+    handler::IcmpHandler,
+    wan::{TunTap, UdpDevice, Wan, WgDevice},
+    Router, Switch,
 };
 use tracing::Level;
 
-use crate::{
-    config::WanConfig,
-    router::{
-        handler::IcmpHandler,
-        wan::{TunTap, UdpDevice},
-        Switch,
-    },
-};
+use crate::config::WanConfig;
 
 #[derive(Parser)]
 pub(crate) struct Opts {

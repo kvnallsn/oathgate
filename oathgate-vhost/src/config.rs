@@ -7,6 +7,7 @@ use std::{
     path::Path,
 };
 
+use oathgate_net::router::wan::WgConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -22,14 +23,6 @@ pub enum WanConfig {
     Tap(TapConfig),
     Udp(UdpConfig),
     Wireguard(WgConfig),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct WgConfig {
-    pub key: String,
-    pub ipv4: Ipv4Addr,
-    pub peer: String,
-    pub endpoint: SocketAddr,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -1,4 +1,4 @@
-//! Simple Router
+//! Simple L3 Router
 
 mod switch;
 
@@ -6,19 +6,17 @@ pub mod handler;
 pub mod wan;
 
 use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr},
+    borrow::Cow, collections::HashMap, net::{IpAddr, Ipv4Addr}
 };
 
 use flume::{Receiver, Sender};
-use oathgate_net::{
+
+pub use self::switch::Switch;
+use crate::{
     protocols::ArpPacket,
     types::{EtherType, MacAddress, NetworkAddress},
     EthernetFrame, EthernetPacket, Ipv4Packet, ProtocolError,
 };
-
-pub use self::switch::Switch;
-use crate::error::AppResult;
 
 use self::{
     handler::ProtocolHandler,
@@ -65,6 +63,37 @@ pub struct RouterBuilder {
 
     /// Wide Area Network (WAN) connection
     wan: Option<Box<dyn Wan>>,
+}
+
+/// Collection of errors that may occur during routing/switching packets
+#[derive(Debug, thiserror::Error)]
+pub enum RouterError {
+    #[error("router: {0}")]
+    Generic(Cow<'static, str>),
+
+    #[error("nix: {0}")]
+    Errno(#[from] nix::errno::Errno),
+
+    #[error("i/o: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("protocol failed: {0}")]
+    Protocol(#[from] ProtocolError),
+
+    #[error("pcap: {0}")]
+    Pcap(#[from] pcap_file::PcapError),
+
+    #[error("unable to decode base64: {0}")]
+    DecodeSlice(#[from] base64::DecodeSliceError),
+
+    #[error("sender channel closed")]
+    ChannelClosed,
+}
+
+impl<T> From<flume::SendError<T>> for RouterError {
+    fn from(_: flume::SendError<T>) -> Self {
+        Self::ChannelClosed 
+    }
 }
 
 #[allow(dead_code)]
@@ -216,7 +245,7 @@ impl Router {
         }
     }
 
-    fn forward_packet(&mut self, pkt: Ipv4Packet) -> AppResult<()> {
+    fn forward_packet(&mut self, pkt: Ipv4Packet) -> Result<(), RouterError> {
         if let Some(ref wan) = self.wan {
             if let Err(error) = wan.write(pkt) {
                 tracing::warn!(?error, "unable to write to wan, dropping packet");

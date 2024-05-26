@@ -3,7 +3,7 @@
 use std::num::TryFromIntError;
 
 use nix::errno::Errno;
-use oathgate_net::ProtocolError;
+use oathgate_net::{router::RouterError, ProtocolError};
 
 /// Helper type for application errors
 pub type AppResult<T> = std::result::Result<T, Error>;
@@ -37,9 +37,6 @@ pub enum MemoryError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum QueueError {
-    #[error("queue is disabled")]
-    Disabled,
-
     #[error("memory: {0}")]
     Memory(#[from] MemoryError),
 
@@ -48,12 +45,6 @@ pub enum QueueError {
 
     #[error("i/o: {0}")]
     IO(#[from] std::io::Error),
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum UpstreamError {
-    #[error("unable to create upstream")]
-    CreateFailed(String),
 }
 
 /// Oathgate Error Type
@@ -101,14 +92,8 @@ pub enum Error {
     #[error("protocol failed: {0}")]
     Protocol(#[from] ProtocolError),
 
-    #[error("upstream: {0}")]
-    Upstream(#[from] UpstreamError),
-
-    #[error("unable to decode slice: {0}")]
-    Base64(#[from] base64::DecodeSliceError),
-
-    #[error("{0}")]
-    General(String),
+    #[error("router: {0}")]
+    Router(#[from] RouterError),
 }
 
 impl<T> From<flume::SendError<T>> for Error {

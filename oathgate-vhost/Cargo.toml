@@ -7,18 +7,15 @@ edition = "2021"
 
 [dependencies]
 anyhow = { workspace = true }
-base64 = "0.22.1"
 bitflags = "2.5.0"
-boringtun = "0.6.0"
 clap = { workspace = true }
-flume = { version = "0.11.0", default-features = false, features = ["eventual-fairness"] }
-mio = { version = "0.8.11", features = ["net", "os-poll", "os-ext"] }
-nix = { version = "0.28.0", features = ["socket", "uio", "mman", "ioctl", "net", "time"] }
+flume = { workspace = true }
+mio = { workspace = true }
+nix = { workspace = true }
 oathgate-net = { path = "../oathgate-net" }
-parking_lot = "0.12.2"
-pcap-file = "2.0.0"
+parking_lot = { workspace = true }
 rand = { workspace =  true }
-serde = { version = "1.0.201", features = ["derive"] }
+serde = { workspace = true }
 serde_yaml = "0.9.34"
 thiserror = { workspace = true }
 tracing = { workspace = true }

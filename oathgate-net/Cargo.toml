@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+base64 = "0.22.1"
+boringtun = "0.6.0"
+flume = { workspace = true }
+mio = { workspace = true }
+nix = { workspace = true }
+parking_lot = { workspace = true }
+pcap-file = "2.0.0"
 rand = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

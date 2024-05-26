@@ -8,12 +8,12 @@ use std::{
 };
 
 use nix::unistd;
+use oathgate_net::router::Switch;
 use virtio_queue::{Queue, QueueOwnedT, QueueT};
 use vm_memory::{GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap};
 
 use crate::{
     error::{AppResult, Error, MemoryError},
-    router::Switch,
     types::{DeviceRxQueue, VirtioNetHeader},
 };
 

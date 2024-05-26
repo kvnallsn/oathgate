@@ -1,10 +1,7 @@
 //! A wireguard upstream provider to encrypt all traffic
 
 use std::{
-    io::ErrorKind,
-    net::{Ipv4Addr, SocketAddr},
-    os::fd::{AsFd, AsRawFd},
-    sync::Arc,
+    borrow::Cow, io::ErrorKind, net::{Ipv4Addr, SocketAddr}, os::fd::{AsFd, AsRawFd}, sync::Arc
 };
 
 use base64::Engine;
@@ -18,12 +15,11 @@ use nix::sys::{
     time::TimeSpec,
     timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags},
 };
-use oathgate_net::{nat::NatTable, Ipv4Header, Ipv4Packet};
+use serde::{Serialize, Deserialize};
 
 use crate::{
-    config::WgConfig,
-    error::{AppResult, Error},
-    router::RouterHandle,
+    nat::NatTable, Ipv4Header, Ipv4Packet,
+    router::{RouterError, RouterHandle},
 };
 
 use super::{Wan, WanHandle};
@@ -63,12 +59,20 @@ pub struct WgHandle {
     waker: Arc<Waker>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct WgConfig {
+    pub key: String,
+    pub ipv4: Ipv4Addr,
+    pub peer: String,
+    pub endpoint: SocketAddr,
+}
+
 impl WgDevice {
     /// Creates a new WireGuard tunnel device from the supplied config
     ///
     /// ### Arguments
     /// * `cfg` - WireGuard configuration
-    pub fn create(cfg: WgConfig) -> AppResult<Self> {
+    pub fn create(cfg: WgConfig) -> Result<Self, RouterError> {
         use base64::prelude::BASE64_STANDARD;
 
         let mut key = [0u8; 32];
@@ -80,7 +84,7 @@ impl WgDevice {
         let peer = PublicKey::from(peer);
 
         let tun =
-            Tunn::new(key, peer, None, None, 1, None).map_err(|e| Error::General(e.to_owned()))?;
+            Tunn::new(key, peer, None, None, 1, None).map_err(|e| RouterError::Generic(Cow::Borrowed(e)))?;
 
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), TOKEN_WAKER)?;
@@ -111,7 +115,7 @@ impl WgDevice {
         action: TunnResult,
         router: &RouterHandle,
         sock: &UdpSocket,
-    ) -> AppResult<bool> {
+    ) -> Result<bool, RouterError> {
         let mut to_network = false;
 
         match action {
@@ -155,11 +159,11 @@ impl WgDevice {
 }
 
 impl Wan for WgDevice {
-    fn as_wan_handle(&self) -> AppResult<Box<dyn WanHandle>> {
+    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, RouterError> {
         Ok(Box::new(self.handle.clone()))
     }
 
-    fn run(mut self: Box<Self>, router: RouterHandle) -> AppResult<()> {
+    fn run(mut self: Box<Self>, router: RouterHandle) -> Result<(), RouterError> {
         let sock = std::net::UdpSocket::bind("0.0.0.0:0")?;
         sock.set_nonblocking(true)?;
         let mut sock = UdpSocket::from_std(sock);
@@ -184,7 +188,7 @@ impl Wan for WgDevice {
         let rx = self
             .rx
             .take()
-            .ok_or_else(|| Error::General(String::from("wireguard missing receiver")))?;
+            .ok_or_else(|| RouterError::Generic(String::from("wireguard missing receiver").into()))?;
 
         // Handle packets / messages
         // from vm (aka write): rx -> tunn -> socket
@@ -261,7 +265,7 @@ impl Wan for WgDevice {
 }
 
 impl WanHandle for WgHandle {
-    fn write(&self, pkt: Ipv4Packet) -> Result<(), Error> {
+    fn write(&self, pkt: Ipv4Packet) -> Result<(), RouterError> {
         self.tx.send(pkt)?;
         self.waker.wake()?;
         Ok(())

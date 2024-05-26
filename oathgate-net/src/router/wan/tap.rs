@@ -1,25 +1,25 @@
 //! an upstream tap device
 
 use std::{
+    borrow::Cow,
     fmt::Debug,
     fs::File,
-    io::{IoSlice, Read, Write},
+    io::{self, IoSlice, Read, Write},
     os::fd::AsRawFd,
     sync::Arc,
 };
 
 use crate::{
-    error::{AppResult, Error, UpstreamError},
-    router::RouterHandle,
+    router::{RouterError, RouterHandle},
+    types::MacAddress,
+    Ipv4Packet,
 };
-
 use flume::{Receiver, Sender};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token, Waker};
 use nix::{
     libc::{IFF_NO_PI, IFF_TAP, IFF_TUN, IFNAMSIZ, SIOCGIFHWADDR},
     net::if_::if_nametoindex,
 };
-use oathgate_net::{types::MacAddress, Ipv4Packet};
 
 use super::{Wan, WanHandle};
 
@@ -71,7 +71,7 @@ impl TunTap {
     /// Creates a new tap device
     ///
     /// Note: This requires administration privileges or CAP_NET_ADMIN
-    pub fn create_tap(name: String) -> AppResult<Self> {
+    pub fn create_tap(name: String) -> Result<Self, RouterError> {
         Self::create(name, IFF_TAP)
     }
 
@@ -79,11 +79,11 @@ impl TunTap {
     ///
     /// Note: This requires administration privileges or CAP_NET_ADMIN
     #[allow(dead_code)]
-    pub fn create_tun(name: String) -> AppResult<Self> {
+    pub fn create_tun(name: String) -> Result<Self, RouterError> {
         Self::create(name, IFF_TUN)
     }
 
-    fn create(name: String, flags: i32) -> AppResult<Self> {
+    fn create(name: String, flags: i32) -> Result<Self, RouterError> {
         // #define TUNSETIFF _IOW('T', 202, int)
         nix::ioctl_write_int!(tunsetiff, b'T', 202);
 
@@ -95,9 +95,9 @@ impl TunTap {
 
         let len = name.len();
         if len > IFNAMSIZ {
-            return Err(UpstreamError::CreateFailed(format!(
+            return Err(RouterError::Generic(Cow::Owned(format!(
                 "device name ({name}) is too long, max length is {IFNAMSIZ}, provided length {len}",
-            )))?;
+            ))))?;
         }
 
         let mut ifreq = IfReqCreateTun::default();
@@ -160,14 +160,14 @@ impl TunTap {
         })
     }
 
-    fn read_from_device(&mut self) -> AppResult<()> {
+    fn read_from_device(&mut self) -> io::Result<()> {
         let mut buf = [0u8; 1024];
         let sz = self.fd.read(&mut buf)?;
         tracing::trace!("[tap] read {sz} bytes");
         Ok(())
     }
 
-    fn write_to_device(&mut self, pkt: Ipv4Packet) -> AppResult<()> {
+    fn write_to_device(&mut self, pkt: Ipv4Packet) -> io::Result<()> {
         let iovs = [IoSlice::new(pkt.as_bytes())];
         let sz = self.fd.write_vectored(&iovs)?;
 
@@ -184,7 +184,7 @@ impl Debug for TunTap {
 }
 
 impl Wan for TunTap {
-    fn as_wan_handle(&self) -> AppResult<Box<dyn WanHandle>> {
+    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, RouterError> {
         let waker = Waker::new(self.poll.registry(), TOKEN_WRITE)?;
         self.poll.registry().register(
             &mut SourceFd(&self.fd.as_raw_fd()),
@@ -200,13 +200,11 @@ impl Wan for TunTap {
         Ok(Box::new(handle))
     }
 
-    fn run(mut self: Box<Self>, _router: RouterHandle) -> AppResult<()> {
+    fn run(mut self: Box<Self>, _router: RouterHandle) -> Result<(), RouterError> {
         let mut events = Events::with_capacity(MAX_EVENTS_CAPACITY);
 
-        let rx = self
-            .rx
-            .take()
-            .ok_or_else(|| Error::General(String::from("no receiver available, already used")))?;
+        let rx = self.rx.take().unwrap();
+        //.ok_or_else(|| Error::General(String::from("no receiver available, already used")))?;
 
         loop {
             self.poll.poll(&mut events, None)?;
@@ -240,7 +238,7 @@ impl Wan for TunTap {
 }
 
 impl WanHandle for TunTapHandle {
-    fn write(&self, pkt: Ipv4Packet) -> Result<(), crate::error::Error> {
+    fn write(&self, pkt: Ipv4Packet) -> Result<(), RouterError> {
         self.tx.send(pkt).ok();
         self.waker.wake().ok();
         Ok(())

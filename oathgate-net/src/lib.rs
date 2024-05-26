@@ -3,6 +3,7 @@ mod ipv4;
 mod macros;
 pub mod nat;
 pub mod protocols;
+pub mod router;
 pub mod types;
 
 use std::net::Ipv4Addr;
