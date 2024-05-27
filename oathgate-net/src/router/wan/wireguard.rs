@@ -1,7 +1,12 @@
 //! A wireguard upstream provider to encrypt all traffic
 
 use std::{
-    borrow::Cow, io::ErrorKind, net::{Ipv4Addr, SocketAddr}, os::fd::{AsFd, AsRawFd}, sync::Arc
+    borrow::Cow,
+    fmt::Debug,
+    io::ErrorKind,
+    net::{Ipv4Addr, SocketAddr},
+    os::fd::{AsFd, AsRawFd},
+    sync::Arc,
 };
 
 use base64::Engine;
@@ -15,11 +20,12 @@ use nix::sys::{
     time::TimeSpec,
     timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags},
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    nat::NatTable, Ipv4Header, Ipv4Packet,
+    nat::NatTable,
     router::{RouterError, RouterHandle},
+    Ipv4Header, Ipv4Packet,
 };
 
 use super::{Wan, WanHandle};
@@ -59,12 +65,22 @@ pub struct WgHandle {
     waker: Arc<Waker>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct WgConfig {
     pub key: String,
     pub ipv4: Ipv4Addr,
     pub peer: String,
     pub endpoint: SocketAddr,
+}
+
+impl Debug for WgConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "WgConfig {{ key: \"--snipped--\", ipv4: {}, peer: {}, endpoint: {} }}",
+            self.ipv4, self.peer, self.endpoint
+        )
+    }
 }
 
 impl WgDevice {
@@ -83,8 +99,8 @@ impl WgDevice {
         let key = StaticSecret::from(key);
         let peer = PublicKey::from(peer);
 
-        let tun =
-            Tunn::new(key, peer, None, None, 1, None).map_err(|e| RouterError::Generic(Cow::Borrowed(e)))?;
+        let tun = Tunn::new(key, peer, None, None, 1, None)
+            .map_err(|e| RouterError::Generic(Cow::Borrowed(e)))?;
 
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), TOKEN_WAKER)?;
@@ -185,10 +201,9 @@ impl Wan for WgDevice {
             Interest::READABLE,
         )?;
 
-        let rx = self
-            .rx
-            .take()
-            .ok_or_else(|| RouterError::Generic(String::from("wireguard missing receiver").into()))?;
+        let rx = self.rx.take().ok_or_else(|| {
+            RouterError::Generic(String::from("wireguard missing receiver").into())
+        })?;
 
         // Handle packets / messages
         // from vm (aka write): rx -> tunn -> socket

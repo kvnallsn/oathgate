@@ -11,7 +11,8 @@ use std::{
 
 use flume::{Receiver, Sender};
 
-pub use self::switch::Switch;
+pub use self::switch::{Switch, SwitchPort};
+
 use crate::{
     protocols::ArpPacket,
     types::{EtherType, MacAddress, NetworkAddress},
@@ -25,10 +26,6 @@ use self::{
 
 const ETHERNET_HDR_SZ: usize = 14;
 const IPV4_HDR_SZ: usize = 20;
-
-pub trait RouterPort: Send + Sync {
-    fn enqueue(&self, frame: EthernetFrame, pkt: Vec<u8>);
-}
 
 pub enum RouterMsg {
     Lan(EthernetPacket),
@@ -333,7 +330,7 @@ impl RouterHandle {
     }
 }
 
-impl RouterPort for RouterHandle {
+impl SwitchPort for RouterHandle {
     fn enqueue(&self, frame: EthernetFrame, pkt: Vec<u8>) {
         let pkt = EthernetPacket::new(frame, pkt);
         self.tx.send(RouterMsg::Lan(pkt)).ok();

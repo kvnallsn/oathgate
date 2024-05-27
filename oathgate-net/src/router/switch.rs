@@ -10,18 +10,28 @@ use pcap_file::pcap::{PcapPacket, PcapWriter};
 
 use crate::{types::MacAddress, EthernetFrame, ProtocolError};
 
-use super::{RouterError, RouterPort, ETHERNET_HDR_SZ};
+use super::{RouterError, ETHERNET_HDR_SZ};
 
 #[derive(Clone, Default)]
 pub struct Switch {
     /// Handles to devices connected to switch ports
-    ports: Arc<RwLock<Vec<Box<dyn RouterPort>>>>,
+    ports: Arc<RwLock<Vec<Box<dyn SwitchPort>>>>,
 
     /// Map of MacAddress to switch ports
     cache: Arc<RwLock<HashMap<MacAddress, usize>>>,
 
     /// Pcap logger, if configured
     logger: PcapLogger,
+}
+
+/// A `SwitchPort` represents a device that can be connected to a switch
+pub trait SwitchPort: Send + Sync {
+    /// Places a packet in the device's receive queue
+    ///
+    /// ### Arguments
+    /// * `frame` - Ethernet frame header
+    /// * `pkt` - Ethernet frame payload
+    fn enqueue(&self, frame: EthernetFrame, pkt: Vec<u8>);
 }
 
 #[derive(Clone, Debug, Default)]
@@ -43,7 +53,7 @@ impl Switch {
     ///
     /// ### Arguments
     /// * `port` - Device to connect to this switch
-    pub fn connect<P: RouterPort + 'static>(&self, port: P) -> usize {
+    pub fn connect<P: SwitchPort + 'static>(&self, port: P) -> usize {
         let mut ports = self.ports.write();
         let idx = ports.len();
         ports.push(Box::new(port));
@@ -133,7 +143,6 @@ impl PcapLogger {
 
         let mut writer = PcapWriter::new(file)?;
         let (tx, rx) = flume::unbounded::<Vec<u8>>();
-        //let logger = Self { writer };
 
         std::thread::Builder::new()
             .name(String::from("pcap-logger"))

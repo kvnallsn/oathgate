@@ -171,11 +171,13 @@ impl VirtQueue {
             Some(mem) => mem,
         };
 
-        let mut buffer = [0u8; 1024];
+        let mut buffer = [0u8; 4096];
         let chains = self.queue.iter(mem.deref())?.collect::<Vec<_>>();
         for (idx, chain) in chains.into_iter().enumerate() {
             let mut pkt = Vec::new();
             let head_idx = chain.head_index();
+            tracing::trace!("[queue] reading from descriptor chain: {}", head_idx);
+
             let mut reader = chain.reader(mem.deref())?;
             loop {
                 let sz = reader.read(&mut buffer)?;
@@ -187,7 +189,7 @@ impl VirtQueue {
 
             let (hdr, pkt) = VirtioNetHeader::extract(pkt)?;
             let len = pkt.len();
-            tracing::trace!(?idx, "[kick-tx] read {} bytes", len);
+            tracing::trace!(slot = %head_idx, %idx, "[kick-tx] read {} bytes", len);
             tracing::trace!(?idx, "[kick-tx] header: {hdr:02x?}");
             tracing::trace!(?idx, "[kick-tx] data: {pkt:02x?}");
 
@@ -202,6 +204,7 @@ impl VirtQueue {
         Ok(())
     }
 
+    /// Writes data into the receive queues
     pub fn kick_rx(&mut self, pkt: &[u8]) -> AppResult<()> {
         let enabled = crate::cast!(u64, pkt[0..8]);
         if enabled == 0 {
@@ -215,6 +218,7 @@ impl VirtQueue {
         Ok(())
     }
 
+    /// Writes data into the receive queues
     pub fn handle_rx_queued(&mut self) -> AppResult<()> {
         let mut pending = self.pending.lock();
         if pending.is_empty() {
@@ -249,7 +253,7 @@ impl VirtQueue {
             };
 
             let head_idx = chain.head_index();
-            tracing::trace!("writing to descriptor chain: {}", head_idx);
+            tracing::trace!("[queue] writing to descriptor chain: {}", head_idx);
             let mut writer = chain.writer(mem.deref())?;
 
             let vhdr = VirtioNetHeader::new().as_bytes();
@@ -262,6 +266,7 @@ impl VirtQueue {
             writer.write_all(&vhdr)?;
             writer.write_all(&frame)?;
             writer.write_all(&pkt.payload)?;
+            tracing::trace!(slot = %head_idx, "[kick-rx] write {sz} bytes");
             tracing::trace!("[queue] frame:  {:02x?}", frame);
             tracing::trace!("[queue] packet: {:02x?}", &pkt.payload);
 

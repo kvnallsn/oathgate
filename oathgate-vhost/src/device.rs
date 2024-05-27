@@ -18,7 +18,7 @@ use nix::{
     unistd,
 };
 use oathgate_net::{
-    router::{RouterPort, Switch},
+    router::{SwitchPort, Switch},
     EthernetFrame, EthernetPacket,
 };
 use parking_lot::lock_api::Mutex;
@@ -59,6 +59,77 @@ const VHOST_USER_GET_MAX_MEM_SLOTS: u32 = 36;
 const VHOST_USER_ADD_MEM_REG: u32 = 37;
 const VHOST_USER_SET_STATUS: u32 = 39;
 const VHOST_USER_GET_STATUS: u32 = 40;
+
+// virtio-net features
+// https://docs.oasis-open.org/virtio/virtio/v1.1/cs01/virtio-v1.1-cs01.html#x1-1940001
+/// Device handles packets with partial checksum. This “checksum offload” is a common feature on modern network cards.
+const VIRTIO_NET_F_CSUM: u64 = 0x0001;
+
+/// Driver handles packets with partial checksum.
+const _VIRTIO_NET_F_GUEST_CSUM: u64 = 0x0002;
+
+/// Control channel offloads reconfiguration support.
+const _VIRTIO_NET_F_CTRL_GUEST_OFFLOADS: u64 = 0x0004;
+
+/// Device maximum MTU reporting is supported. If offered by the device, device advises driver about the value of its maximum MTU. If negotiated, the driver uses mtu as the maximum MTU value.
+const _VIRTIO_NET_F_MTU: u64 = 0x0008;
+
+/// Device has given MAC address.
+const VIRTIO_NET_F_MAC: u64 = 0x0020;
+
+/// Driver can receive TSOv4
+const _VIRTIO_NET_F_GUEST_TSO4: u64 = 0x0080;
+
+/// Driver can receive TSOv6.
+const _VIRTIO_NET_F_GUEST_TSO6: u64 = 0x0100;
+
+/// Driver can receive TSO with ECN.
+const _VIRTIO_NET_F_GUEST_ECN: u64 = 0x0200;
+
+/// Driver can receive UFO.
+const _VIRTIO_NET_F_GUEST_UFO: u64 = 0x0400;
+
+/// Device can receive TSOv4.
+const _VIRTIO_NET_F_HOST_TSO4: u64 = 0x0800;
+
+/// Device can receive TSOv6.
+const _VIRTIO_NET_F_HOST_TSO6: u64 = 0x1000;
+
+/// Device can receive TSO with ECN.
+const _VIRTIO_NET_F_HOST_ECN: u64 = 0x2000;
+
+/// Device can receive UFO.
+const _VIRTIO_NET_F_HOST_UFO: u64 = 0x4000;
+
+/// Driver can merge receive buffers.
+const _VIRTIO_NET_F_MRG_RXBUF: u64 = 0x8000;
+
+/// Configuration status field is available.
+const VIRTIO_NET_F_STATUS: u64 = 0x1_0000;
+
+/// Control channel is available.
+const _VIRTIO_NET_F_CTRL_VQ: u64 = 0x2_0000;
+
+/// Control channel RX mode support.
+const _VIRTIO_NET_F_CTRL_RX: u64 = 0x4_0000;
+
+/// Control channel VLAN filtering.
+const _VIRTIO_NET_F_CTRL_VLAN: u64 = 0x8_0000;
+
+/// Driver can send gratuitous packets.
+const _VIRTIO_NET_F_GUEST_ANNOUNCE: u64 = 0x20_0000;
+
+/// Device supports multiqueue with automatic receive steering.
+const _VIRTIO_NET_F_MQ: u64 = 0x40_0000;
+
+/// Set MAC address through control channel.
+const _VIRTIO_NET_F_CTRL_MAC_ADDR: u64 = 0x80_0000;
+
+/// Device can process duplicated ACKs and report number of coalesced segments and duplicated ACKs
+const _VIRTIO_NET_F_RSC_EXT: u64 = 0x2000_0000_0000_0000;
+
+/// Device may act as a standby for a primary device with the same MAC address.
+const _VIRTIO_NET_F_STANDBY: u64 = 0x4000_0000_0000_0000;
 
 const VHOST_USER_BACKEND_CONFIG_CHANGE_MSG: u32 = 2;
 
@@ -137,7 +208,7 @@ impl VirtioDeviceRxQueue {
     }
 }
 
-impl RouterPort for VirtioDeviceRxQueue {
+impl SwitchPort for VirtioDeviceRxQueue {
     /// Puts a packet into the queue and notifies the device
     ///
     /// ### Arguments
@@ -310,7 +381,7 @@ impl VirtioDevice {
                 // Feature bit VHOST_USER_F_PROTOCOL_FEATURES signals back-end support for
                 // VHOST_USER_GET_PROTOCOL_FEATURES and VHOST_USER_SET_PROTOCOL_FEATURES.
                 let payload = VirtioFeatures::RING_VERSION_1 | VirtioFeatures::PROTOCOL_FEATURES;
-                let payload = payload.bits() | 0x10821;
+                let payload = payload.bits() | VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS;
                 tracing::trace!("[get-features] sending virtio features: 0x{:08x}", payload);
                 self.send_response(strm, hdr.ty, &payload.to_le_bytes())?;
             }

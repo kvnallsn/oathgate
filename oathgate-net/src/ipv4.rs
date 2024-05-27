@@ -5,9 +5,7 @@ use std::net::Ipv4Addr;
 use rand::Rng;
 
 use crate::{
-    cast, ph_checksum,
-    protocols::{NET_PROTOCOL_TCP, NET_PROTOCOL_UDP},
-    ProtocolError,
+    cast, ph_checksum, protocols::{NET_PROTOCOL_TCP, NET_PROTOCOL_UDP}, ProtocolError
 };
 
 /// Represents the Ipv4 header
@@ -136,7 +134,7 @@ impl Ipv4Header {
     ///
     /// ### Arguments
     /// * `src` - New IPv4 src address
-    pub fn masquerade(&mut self, src: Ipv4Addr) -> Ipv4Addr {
+    fn masquerade(&mut self, src: Ipv4Addr) -> Ipv4Addr {
         let old = self.src;
         self.src = src;
         old
@@ -147,7 +145,7 @@ impl Ipv4Header {
     ///
     /// ### Arguments
     /// * `src` - New IPv4 destination address
-    pub fn unmasquerade(&mut self, dst: Ipv4Addr) -> Ipv4Addr {
+    fn unmasquerade(&mut self, dst: Ipv4Addr) -> Ipv4Addr {
         let old = self.dst;
         self.dst = dst;
         old
@@ -244,6 +242,11 @@ impl Ipv4Packet {
         self.fix_transport_checksum();
     }
 
+    /// Computes the checksum for this packet
+    pub fn checksum(&self) -> u16 {
+        u16::from_be_bytes([self.data[10], self.data[11]])
+    }
+
     /// Sets the destination ip address to the provided value and recomputes the header checksum
     ///
     /// ### Arguments
@@ -262,19 +265,18 @@ impl Ipv4Packet {
         let proto = self.protocol();
         let payload = self.payload_mut();
 
-        match proto {
-            NET_PROTOCOL_TCP => {
-                payload[16..18].copy_from_slice(&[0, 0]);
-                let sum = ph_checksum(src, dst, proto, payload);
-                payload[16..18].copy_from_slice(&sum.to_be_bytes());
+        let (s, e) = match proto {
+            NET_PROTOCOL_TCP => (16, 18),
+            NET_PROTOCOL_UDP => (6, 8),
+            _ => {
+                // no need to fixup anything
+                return;
             }
-            NET_PROTOCOL_UDP => {
-                payload[6..8].copy_from_slice(&[0, 0]);
-                let sum = ph_checksum(src, dst, proto, payload);
-                payload[6..8].copy_from_slice(&sum.to_be_bytes());
-            }
-            _ => (),
-        }
+        };
+
+        payload[s..e].copy_from_slice(&[0, 0]);
+        let sum = ph_checksum(src, dst, proto, payload);
+        payload[s..e].copy_from_slice(&sum.to_be_bytes());
     }
 
     /// Generates a new Ipv4 header to use as a reply message
@@ -283,5 +285,38 @@ impl Ipv4Packet {
     /// * `payload` - Payload that will be set in the reply
     pub fn reply(&self, payload: &[u8]) -> Ipv4Header {
         self.header.gen_reply(payload)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::Read, net::Ipv4Addr};
+
+    use super::Ipv4Packet;
+
+    fn init_tracing() {
+        tracing_subscriber::FmtSubscriber::builder().with_max_level(tracing::Level::DEBUG).pretty().init();
+    }
+
+    fn read_file(path: &str) -> Ipv4Packet {
+        use std::fs::File;
+
+        let mut data = Vec::new();
+        let mut fd = File::open(path).unwrap();
+        fd.read_to_end(&mut data).unwrap();
+
+        let pkt = Ipv4Packet::parse(data).unwrap();
+        tracing::debug!("ipv4 packet id: 0x{:04x}", pkt.header.id);
+        pkt
+    }
+
+    #[test]
+    fn fixup_tcp_checksum() {
+        init_tracing();
+        let mut pkt = read_file("data/checksum.bin");
+        pkt.unmasquerade(Ipv4Addr::from([10, 10, 10, 10]));
+        let payload = pkt.payload();
+        let tcp_csum = u16::from_be_bytes([payload[16], payload[17]]);
+        assert_eq!(tcp_csum, 0xE6E7, "checksum mismatch");
     }
 }

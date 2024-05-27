@@ -40,7 +40,7 @@ pub fn checksum(data: &[u8]) -> u16 {
         sum += u32::from_be_bytes([0x00, 0x00, b0, b1]);
     }
 
-    !(((sum & 0xFFFF) + ((sum >> 16) & 0xFF)) as u16)
+    !(((sum & 0xFFFF) + ((sum >> 16) & 0xFFFF)) as u16)
 }
 
 /// Computes the pseudo-header checksum as used by TCP and UDP
@@ -73,5 +73,5 @@ pub fn ph_checksum(src: Ipv4Addr, dst: Ipv4Addr, proto: u8, data: &[u8]) -> u16 
         sum += u32::from_be_bytes([0x00, 0x00, b0, b1]);
     }
 
-    !(((sum & 0xFFFF) + ((sum >> 16) & 0xFF)) as u16)
+    !(((sum & 0xFFFF) + ((sum >> 16) & 0xFFFF)) as u16)
 }
