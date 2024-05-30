@@ -2,15 +2,14 @@
 
 use std::{io, path::PathBuf};
 
-use mio::{net::UnixListener, Events, Interest, Poll, Token};
+use mio::{event::Source, net::UnixListener, Events, Interest, Poll, Token};
 use oathgate_net::router::Switch;
 
-use crate::device::{DeviceOpts, VirtioDevice};
+use crate::{device::{DeviceOpts, VirtioDevice}, error::AppResult};
 
 /// An `FdMap` is a map of unique tokens to file descriptors
 pub struct VHostSocket {
-    socket_path: PathBuf,
-    poll: Poll,
+    socket: UnixListener,
 }
 
 impl VHostSocket {
@@ -21,20 +20,32 @@ impl VHostSocket {
             std::fs::remove_file(&socket_path)?;
         }
 
-        let poll = Poll::new()?;
-        Ok(Self { socket_path, poll })
+        let socket = UnixListener::bind(&socket_path)?;
+
+        Ok(Self { socket })
+    }
+
+    pub fn accept_and_spawn(&mut self, device_opts: DeviceOpts, switch: Switch) -> AppResult<()> {
+        let (strm, _peer) = self.socket.accept()?;
+        tracing::info!("[vhost] accepted unix socket connection, spawning device");
+
+        let dev = VirtioDevice::new(switch, device_opts)?;
+        dev.spawn(strm)?;
+        Ok(())
     }
 
     pub fn run(&mut self, device_opts: DeviceOpts, switch: Switch) -> io::Result<()> {
-        let mut listener = UnixListener::bind(&self.socket_path)?;
         let listener_token = Token(0);
-        self.poll
+
+        let mut poll = Poll::new()?;
+
+        poll
             .registry()
-            .register(&mut listener, listener_token, Interest::READABLE)?;
+            .register(self, listener_token, Interest::READABLE)?;
 
         let mut events = Events::with_capacity(10);
         loop {
-            if let Err(error) = self.poll.poll(&mut events, None) {
+            if let Err(error) = poll.poll(&mut events, None) {
                 tracing::error!(?error, "unable to poll");
                 break;
             }
@@ -43,17 +54,8 @@ impl VHostSocket {
                 let token = event.token();
                 match token {
                     token if token == listener_token => {
-                        let (strm, peer) = listener.accept()?;
-                        tracing::info!(?peer, "accepted unix connection");
-
-                        match VirtioDevice::new(switch.clone(), device_opts.clone()) {
-                            Ok(dev) => match dev.spawn(strm) {
-                                Ok(_) => tracing::trace!("spawned device thread"),
-                                Err(error) => {
-                                    tracing::warn!(?error, "unable to spawn device thread")
-                                }
-                            },
-                            Err(error) => tracing::warn!(?error, "unable to create tap device"),
+                        if let Err(error) = self.accept_and_spawn(device_opts.clone(), switch.clone()) {
+                            tracing::error!(?error, "unable to spawn virtio device");
                         }
                     }
                     Token(token) => tracing::trace!(?token, "[poller] unknown mio token"),
@@ -61,5 +63,29 @@ impl VHostSocket {
             }
         }
         Ok(())
+    }
+}
+
+impl Source for VHostSocket {
+    fn register(
+        &mut self,
+        registry: &mio::Registry,
+        token: Token,
+        interests: Interest,
+    ) -> io::Result<()> {
+        self.socket.register(registry, token, interests)
+    }
+
+    fn reregister(
+        &mut self,
+        registry: &mio::Registry,
+        token: Token,
+        interests: Interest,
+    ) -> io::Result<()> {
+        self.socket.reregister(registry, token, interests)
+    }
+
+    fn deregister(&mut self, registry: &mio::Registry) -> io::Result<()> {
+        self.socket.deregister(registry)
     }
 }

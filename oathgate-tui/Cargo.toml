@@ -1,0 +1,18 @@
+[package]
+name = "oathgate-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { workspace = true }
+crossterm = "0.27.0"
+mio = { workspace = true }
+nix = { workspace = true }
+parking_lot = { workspace = true }
+ratatui = "0.26.3"
+serde = { workspace = true }
+serde_yaml = "0.9.34"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tui-term = "0.1.11"

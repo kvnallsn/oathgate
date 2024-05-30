@@ -110,7 +110,7 @@ impl RouterBuilder {
     ///
     /// ### Arguments
     /// * `ip4` - IPv4 address to assign to this router
-    pub fn build<I: Into<Ipv4Addr>>(self, ip4: I, switch: Switch) -> std::io::Result<()> {
+    pub fn spawn<I: Into<Ipv4Addr>>(self, ip4: I, switch: Switch) -> std::io::Result<()> {
         let network = NetworkAddress::new(ip4.into(), 24);
 
         let (tx, rx) = flume::unbounded();

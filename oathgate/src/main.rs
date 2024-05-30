@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use config::Config;
+use mio::{Events, Interest, Poll, Token};
 use oathgate_net::router::{
     handler::IcmpHandler,
     wan::{TunTap, UdpDevice, Wan, WgDevice},
@@ -49,12 +50,10 @@ fn parse_wan(cfg: WanConfig) -> Result<Option<Box<dyn Wan>>, oathgate_vhost::Err
     }
 }
 
-fn run(opts: Opts) -> Result<(), oathgate_vhost::Error> {
-    let cfg = Config::load(opts.config)?;
-    tracing::debug!(?cfg, "configuration");
+fn run(opts: Opts, cfg: Config) -> Result<(), oathgate_vhost::Error> {
+    const TOKEN_VHOST: Token = Token(0);
 
-    let mut socket = VHostSocket::new(opts.socket)?;
-
+    let mut socket = VHostSocket::new(&opts.socket)?;
     let switch = Switch::new(opts.pcap)?;
 
     // spawn the default route / upstream
@@ -64,11 +63,30 @@ fn run(opts: Opts) -> Result<(), oathgate_vhost::Error> {
     let _router = Router::builder()
         .wan(wan)
         .register_proto_handler(IcmpHandler::default())
-        .build(cfg.router.ipv4, switch.clone())?;
+        .spawn(cfg.router.ipv4, switch.clone())?;
 
-    socket.run(DeviceOpts::default(), switch)?;
+    let mut poller = Poll::new()?;
+    poller
+        .registry()
+        .register(&mut socket, TOKEN_VHOST, Interest::READABLE)?;
 
-    Ok(())
+    let mut events = Events::with_capacity(10);
+    loop {
+        poller.poll(&mut events, None)?;
+
+        for event in &events {
+            match event.token() {
+                TOKEN_VHOST => {
+                    if let Err(error) =
+                        socket.accept_and_spawn(DeviceOpts::default(), switch.clone())
+                    {
+                        tracing::error!(?error, "unable to accet connection");
+                    }
+                }
+                Token(token) => tracing::debug!(%token, "[main] unknown mio token"),
+            }
+        }
+    }
 }
 
 fn main() {
@@ -85,7 +103,10 @@ fn main() {
         .with_max_level(level)
         .init();
 
-    if let Err(error) = run(opts) {
+    let cfg = Config::load(&opts.config).unwrap();
+    tracing::debug!(?cfg, "configuration");
+
+    if let Err(error) = run(opts, cfg) {
         tracing::error!(?error, "unable to run oathgate");
     }
 }
