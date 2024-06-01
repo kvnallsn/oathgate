@@ -1,10 +1,13 @@
 mod config;
 
-use std::path::PathBuf;
+use std::{io::Read, net::SocketAddr, path::PathBuf};
 
 use clap::Parser;
 use config::Config;
-use mio::{Events, Interest, Poll, Token};
+use mio::{
+    net::{TcpListener, TcpStream},
+    Events, Interest, Poll, Token,
+};
 use oathgate_net::router::{
     handler::IcmpHandler,
     wan::{TunTap, UdpDevice, Wan, WgDevice},
@@ -52,6 +55,10 @@ fn parse_wan(cfg: WanConfig) -> Result<Option<Box<dyn Wan>>, oathgate_vhost::Err
 
 fn run(opts: Opts, cfg: Config) -> Result<(), oathgate_vhost::Error> {
     const TOKEN_VHOST: Token = Token(0);
+    const TOKEN_TELNET: Token = Token(1);
+
+    let addr: SocketAddr = "127.0.0.1:3716".parse().unwrap();
+    let mut telnet = TcpListener::bind(addr)?;
 
     let mut socket = VHostSocket::new(&opts.socket)?;
     let switch = Switch::new(opts.pcap)?;
@@ -70,6 +77,11 @@ fn run(opts: Opts, cfg: Config) -> Result<(), oathgate_vhost::Error> {
         .registry()
         .register(&mut socket, TOKEN_VHOST, Interest::READABLE)?;
 
+    poller
+        .registry()
+        .register(&mut telnet, TOKEN_TELNET, Interest::READABLE)?;
+
+    let mut buf = [0u8; 1024];
     let mut events = Events::with_capacity(10);
     loop {
         poller.poll(&mut events, None)?;
@@ -83,10 +95,52 @@ fn run(opts: Opts, cfg: Config) -> Result<(), oathgate_vhost::Error> {
                         tracing::error!(?error, "unable to accet connection");
                     }
                 }
+                TOKEN_TELNET => match telnet.accept() {
+                    Ok((client, peer)) => {
+                        tracing::info!(%peer, "accepted tcp connection");
+                        match handle_tcp_client(client, &mut buf) {
+                            Ok(_) => tracing::debug!("registered tcp client"),
+                            Err(error) => tracing::warn!(?error, "unable to register tcp client"),
+                        }
+                    }
+                    Err(error) => tracing::warn!(?error, "unable to accept tcp connection"),
+                },
                 Token(token) => tracing::debug!(%token, "[main] unknown mio token"),
             }
         }
     }
+}
+
+fn handle_tcp_client(mut strm: TcpStream, buf: &mut [u8]) -> Result<(), oathgate_vhost::Error> {
+    const TOKEN_STRM: Token = Token(0);
+
+    let mut poller = Poll::new()?;
+    poller
+        .registry()
+        .register(&mut strm, TOKEN_STRM, Interest::READABLE)?;
+
+    let mut events = Events::with_capacity(1);
+    poller.poll(&mut events, None)?;
+
+    // only one event so it should be ready now...
+
+    // first message should be a command and port
+    //
+    // known values:
+    // - `TERM <port>`
+    let sz = strm.read(buf)?;
+    let msg = buf[..sz].to_vec();
+    let msg = String::from_utf8(msg).unwrap();
+    let parts = msg.split(" ").collect::<Vec<_>>();
+    let cmd = parts[0].trim();
+    let port: u16 = parts[1].trim().parse().unwrap();
+
+    match cmd {
+        "TERM" => tracing::debug!("connecting to terminal port {port}"),
+        _ => tracing::debug!("unknown tcp command: {cmd}"),
+    }
+
+    Ok(())
 }
 
 fn main() {
