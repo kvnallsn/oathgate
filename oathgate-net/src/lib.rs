@@ -20,6 +20,9 @@ pub enum ProtocolError {
 
     #[error("malformed packet: {0}")]
     MalformedPacket(String),
+
+    #[error("{0}")]
+    Other(String),
 }
 
 /// Computes the checksum used in various networking protocols

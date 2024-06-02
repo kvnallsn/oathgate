@@ -1,11 +1,10 @@
 //! Various Networking  Types
 
 use std::{
-    fmt::{Debug, Display},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    u128,
+    fmt::{Debug, Display}, net::{IpAddr, Ipv4Addr, Ipv6Addr}, os::fd::AsRawFd, u128
 };
 
+use nix::{libc::{IFNAMSIZ, SIOCGIFHWADDR}, sys::socket::SockFlag};
 use rand::RngCore;
 
 use crate::{cast, ProtocolError};
@@ -97,6 +96,46 @@ impl MacAddress {
 
         mac.copy_from_slice(&bytes[0..6]);
         Ok(Self(mac))
+    }
+
+    /// Attempts to read the MAC address from a specified interface
+    ///
+    /// ### Arguments
+    /// * `name` - Name of the ethernet inferface (i.e., eth0, ens18)
+    pub fn from_interface(name: &str) -> Result<Self, ProtocolError> {
+        // #define SIOCGIFHWADDR 0x8927
+        nix::ioctl_read_bad!(siocgifhwaddr, SIOCGIFHWADDR, nix::libc::ifreq);
+
+        let mut ifr_name = [0i8; IFNAMSIZ];
+        for (idx, b) in name.as_bytes().iter().enumerate() {
+            ifr_name[idx] = *b as i8;
+        }
+
+        // get the mac address
+        let mut req = nix::libc::ifreq {
+            ifr_name,
+            ifr_ifru: nix::libc::__c_anonymous_ifr_ifru {
+                ifru_hwaddr: nix::libc::sockaddr {
+                    sa_family: 0,
+                    sa_data: [0; 14],
+                },
+            },
+        };
+
+        let sock = nix::sys::socket::socket(
+            nix::sys::socket::AddressFamily::Inet,
+            nix::sys::socket::SockType::Datagram,
+            SockFlag::empty(),
+            None,
+        ).map_err(|e| ProtocolError::Other(e.to_string()))?;
+
+        let mac  = unsafe {
+            siocgifhwaddr(sock.as_raw_fd(), &mut req as *mut _)
+                .map_err(|e| ProtocolError::Other(e.to_string()))?;
+            req.ifr_ifru.ifru_hwaddr.sa_data
+        };
+
+        MacAddress::try_from(mac.as_slice())
     }
 
     /// Generates a new MAC address with the prefix 52:54:00

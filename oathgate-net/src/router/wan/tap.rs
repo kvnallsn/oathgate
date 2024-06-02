@@ -122,30 +122,7 @@ impl TunTap {
         let (tx, rx) = flume::unbounded();
 
         let mac = match flags {
-            IFF_TAP => {
-                let mut ifr_name = [0i8; IFNAMSIZ];
-                for (idx, b) in name.as_bytes().iter().enumerate() {
-                    ifr_name[idx] = *b as i8;
-                }
-
-                // get the mac address
-                let mut req = nix::libc::ifreq {
-                    ifr_name,
-                    ifr_ifru: nix::libc::__c_anonymous_ifr_ifru {
-                        ifru_hwaddr: nix::libc::sockaddr {
-                            sa_family: 0,
-                            sa_data: [0; 14],
-                        },
-                    },
-                };
-
-                let sa = unsafe {
-                    siocgifhwaddr(fd.as_raw_fd(), &mut req as *mut _)?;
-                    req.ifr_ifru.ifru_hwaddr.sa_data
-                };
-
-                MacAddress::try_from(sa.as_slice())?
-            }
+            IFF_TAP => MacAddress::from_interface(&name)?,
             _ => MacAddress::generate(),
         };
 
