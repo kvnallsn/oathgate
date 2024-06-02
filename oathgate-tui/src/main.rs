@@ -1,9 +1,11 @@
 use std::{
     fs::File,
-    io::{self, Write},
-    os::{fd::AsRawFd, unix::thread::JoinHandleExt},
+    io::{self, Read, Write},
+    os::{
+        fd::AsRawFd,
+        unix::thread::JoinHandleExt,
+    },
     path::PathBuf,
-    process::{Child, ChildStdin},
     sync::Arc,
     time::Duration,
 };
@@ -14,7 +16,10 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
-use mio::{unix::SourceFd, Events, Interest, Poll, Token};
+use mio::{
+    unix::{pipe::Receiver, SourceFd},
+    Events, Interest, Poll, Token,
+};
 use nix::{
     sys::{
         signal::{SigSet, Signal},
@@ -33,10 +38,12 @@ use ratatui::{
 use serde::{Deserialize, Serialize};
 use tracing::Level;
 use tui_term::{vt100, widget::PseudoTerminal};
+use vm::VmHandle;
 
 mod vm;
 
 type Error = Box<dyn std::error::Error + 'static>;
+type VT100 = Arc<RwLock<vt100::Parser>>;
 
 #[derive(Parser)]
 pub struct Opts {
@@ -61,18 +68,20 @@ pub struct Config {
     machine: MachineConfig,
 }
 
-fn run_vm(pty: Arc<RwLock<vt100::Parser>>, mut child: Child) -> Result<(), Error> {
-    //const TOKEN_STDIN: Token = Token(0);
+fn run_vm(
+    pty: Arc<RwLock<vt100::Parser>>,
+    mut handle: VmHandle,
+    mut rx: Receiver,
+) -> Result<(), Error> {
+    const TOKEN_STDIN: Token = Token(0);
     const TOKEN_STDOUT: Token = Token(1);
     const TOKEN_STDERR: Token = Token(2);
     const TOKEN_SIGNAL: Token = Token(3);
 
     let mut poller = Poll::new()?;
 
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let mut stdout = mio::unix::pipe::Receiver::from(stdout);
-    let mut stderr = mio::unix::pipe::Receiver::from(stderr);
+    let mut stdout = handle.stdout_receiver()?;
+    let mut stderr = handle.stderr_receiver()?;
 
     stdout.set_nonblocking(true)?;
     stderr.set_nonblocking(true)?;
@@ -85,6 +94,9 @@ fn run_vm(pty: Arc<RwLock<vt100::Parser>>, mut child: Child) -> Result<(), Error
 
     poller
         .registry()
+        .register(&mut rx, TOKEN_STDIN, Interest::READABLE)?;
+    poller
+        .registry()
         .register(&mut stdout, TOKEN_STDOUT, Interest::READABLE)?;
     poller
         .registry()
@@ -95,6 +107,9 @@ fn run_vm(pty: Arc<RwLock<vt100::Parser>>, mut child: Child) -> Result<(), Error
         Interest::READABLE,
     )?;
 
+    //let stdout_log = File::create("stdout.log")?;
+    //let mut stdout_log = BufWriter::new(stdout_log);
+
     let mut buf = [0u8; 4096];
     let mut events = Events::with_capacity(10);
     'poll: loop {
@@ -102,6 +117,10 @@ fn run_vm(pty: Arc<RwLock<vt100::Parser>>, mut child: Child) -> Result<(), Error
 
         for event in &events {
             match event.token() {
+                TOKEN_STDIN => {
+                    let sz = rx.read(&mut buf)?;
+                    handle.write_pty(&buf[..sz])?;
+                }
                 TOKEN_STDOUT => stdout.try_io(|| {
                     let sz = nix::unistd::read(stdout.as_raw_fd(), &mut buf)?;
                     tracing::trace!("read {sz} bytes from stdout");
@@ -130,17 +149,17 @@ fn run_vm(pty: Arc<RwLock<vt100::Parser>>, mut child: Child) -> Result<(), Error
     }
 
     tracing::debug!("sending SIGTERM to vm");
-    nix::sys::signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM)?;
+    nix::sys::signal::kill(Pid::from_raw(handle.pid() as i32), Signal::SIGTERM)?;
 
     tracing::debug!("waiting for vm process to stop");
     drop(stdout);
     drop(stderr);
-    child.wait()?;
+    handle.wait()?;
 
     Ok(())
 }
 
-fn run_tui(pty: Arc<RwLock<vt100::Parser>>, mut stdin: ChildStdin) -> Result<(), Error> {
+fn run_tui<W: Write>(pty: VT100, mut stdin: W) -> Result<(), Error> {
     crossterm::terminal::enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
@@ -150,7 +169,7 @@ fn run_tui(pty: Arc<RwLock<vt100::Parser>>, mut stdin: ChildStdin) -> Result<(),
     let mut should_quit = false;
     while !should_quit {
         terminal.draw(|f| ui(f, pty.read().screen()))?;
-        should_quit = handle_events(&mut stdin)?;
+        should_quit = handle_events(&pty, &mut stdin)?;
     }
 
     crossterm::terminal::disable_raw_mode()?;
@@ -159,7 +178,7 @@ fn run_tui(pty: Arc<RwLock<vt100::Parser>>, mut stdin: ChildStdin) -> Result<(),
     Ok(())
 }
 
-fn handle_events(stdin: &mut ChildStdin) -> io::Result<bool> {
+fn handle_events<W: Write>(pty: &VT100, stdin: &mut W) -> io::Result<bool> {
     if event::poll(Duration::from_millis(50))? {
         match event::read()? {
             Event::Key(key) => match key.kind {
@@ -169,6 +188,9 @@ fn handle_events(stdin: &mut ChildStdin) -> io::Result<bool> {
                 KeyEventKind::Repeat => (),
                 KeyEventKind::Release => (),
             },
+            Event::Resize(width, height) => {
+                resize_term(height, width, pty);
+            }
             _ => (),
         }
     }
@@ -176,7 +198,7 @@ fn handle_events(stdin: &mut ChildStdin) -> io::Result<bool> {
     Ok(false)
 }
 
-fn handle_key_press(key: KeyEvent, stdin: &mut ChildStdin) -> io::Result<bool> {
+fn handle_key_press<W: Write>(key: KeyEvent, stdin: &mut W) -> io::Result<bool> {
     match key.code {
         KeyCode::F(4) => {
             return Ok(true);
@@ -200,6 +222,10 @@ fn handle_key_press(key: KeyEvent, stdin: &mut ChildStdin) -> io::Result<bool> {
     stdin.flush()?;
 
     Ok(false)
+}
+
+fn resize_term(rows: u16, cols: u16, pty: &VT100) {
+    pty.write().set_size(rows, cols);
 }
 
 fn ui(frame: &mut Frame, screen: &vt100::Screen) {
@@ -243,9 +269,9 @@ fn main() -> Result<(), Error> {
     let fd = File::open(&opts.config)?;
     let cfg: Config = serde_yaml::from_reader(fd)?;
 
-    let mut child = vm::run("/tmp/oathgate.sock", cfg.machine)?;
-    let stdin = child.stdin.take().unwrap();
+    let vm_handle = VmHandle::new("/tmp/oathgate.sock", cfg.machine)?;
 
+    let (tx, rx) = mio::unix::pipe::new().unwrap();
     let parser = Arc::new(RwLock::new(vt100::Parser::new(24, 80, 0)));
 
     let handle = std::thread::Builder::new()
@@ -253,13 +279,13 @@ fn main() -> Result<(), Error> {
         .spawn({
             let parser = Arc::clone(&parser);
             move || {
-                if let Err(error) = run_vm(parser, child) {
+                if let Err(error) = run_vm(parser, vm_handle, rx) {
                     tracing::error!(?error, "unable to run qemu vm");
                 }
             }
         })?;
 
-    run_tui(parser, stdin)?;
+    run_tui(parser, tx)?;
 
     nix::sys::pthread::pthread_kill(handle.as_pthread_t(), Signal::SIGTERM)?;
 

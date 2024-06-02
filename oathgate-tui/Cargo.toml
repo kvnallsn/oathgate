@@ -8,8 +8,10 @@ clap = { workspace = true }
 crossterm = "0.27.0"
 mio = { workspace = true }
 nix = { workspace = true }
+oathgate-net = { path = "../oathgate-net" }
 parking_lot = { workspace = true }
 ratatui = "0.26.3"
+regex = "1.10.4"
 serde = { workspace = true }
 serde_yaml = "0.9.34"
 thiserror = { workspace = true }
