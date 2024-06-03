@@ -2,7 +2,7 @@
 
 mod icmp;
 
-use crate::{Ipv4Packet, ProtocolError};
+use oathgate_net::{Ipv4Packet, ProtocolError};
 
 pub use self::icmp::IcmpHandler;
 

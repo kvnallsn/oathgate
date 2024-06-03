@@ -7,8 +7,9 @@ use std::{
     path::Path,
 };
 
-use oathgate_net::router::wan::WgConfig;
 use serde::{Deserialize, Serialize};
+
+use crate::router::wan::WgConfig;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {

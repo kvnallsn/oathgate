@@ -4,11 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+base64 = "0.22.1"
+boringtun = "0.6.0"
 clap = { workspace = true }
+flume = { workspace = true }
 mio = { workspace = true }
 nix = { workspace = true }
 oathgate-net = { path = "../oathgate-net" }
 oathgate-vhost = { path = "../oathgate-vhost" }
+parking_lot = { workspace = true }
+pcap-file = "2.0.0"
 serde = { workspace = true }
 serde_yaml = "0.9.34"
 thiserror = { workspace = true }

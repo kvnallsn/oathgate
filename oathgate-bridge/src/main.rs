@@ -1,4 +1,6 @@
 mod config;
+mod error;
+mod router;
 
 use std::{io::Read, net::SocketAddr, path::PathBuf};
 
@@ -8,15 +10,18 @@ use mio::{
     net::{TcpListener, TcpStream},
     Events, Interest, Poll, Token,
 };
-use oathgate_net::router::{
-    handler::IcmpHandler,
-    wan::{TunTap, UdpDevice, Wan, WgDevice},
-    Router, Switch,
-};
 use oathgate_vhost::{DeviceOpts, VHostSocket};
 use tracing::Level;
 
-use crate::config::WanConfig;
+use crate::{
+    config::WanConfig,
+    error::Error,
+    router::{
+        handler::IcmpHandler,
+        wan::{TunTap, UdpDevice, Wan, WgDevice},
+        Router, VirtioSwitch,
+    },
+};
 
 #[derive(Parser)]
 pub(crate) struct Opts {
@@ -36,7 +41,7 @@ pub(crate) struct Opts {
     pub verbose: u8,
 }
 
-fn parse_wan(cfg: WanConfig) -> Result<Option<Box<dyn Wan>>, oathgate_vhost::Error> {
+fn parse_wan(cfg: WanConfig) -> Result<Option<Box<dyn Wan>>, Error> {
     match cfg {
         WanConfig::Tap(opts) => {
             let wan = TunTap::create_tap(opts.device)?;
@@ -53,7 +58,7 @@ fn parse_wan(cfg: WanConfig) -> Result<Option<Box<dyn Wan>>, oathgate_vhost::Err
     }
 }
 
-fn run(opts: Opts, cfg: Config) -> Result<(), oathgate_vhost::Error> {
+fn run(opts: Opts, cfg: Config) -> Result<(), Error> {
     const TOKEN_VHOST: Token = Token(0);
     const TOKEN_TELNET: Token = Token(1);
 
@@ -61,7 +66,7 @@ fn run(opts: Opts, cfg: Config) -> Result<(), oathgate_vhost::Error> {
     let mut telnet = TcpListener::bind(addr)?;
 
     let mut socket = VHostSocket::new(&opts.socket)?;
-    let switch = Switch::new(opts.pcap)?;
+    let switch = VirtioSwitch::new(opts.pcap)?;
 
     // spawn the default route / upstream
     let wan = parse_wan(cfg.wan)?;

@@ -3,7 +3,6 @@ mod ipv4;
 mod macros;
 pub mod nat;
 pub mod protocols;
-pub mod router;
 pub mod types;
 
 use std::net::Ipv4Addr;
@@ -23,6 +22,24 @@ pub enum ProtocolError {
 
     #[error("{0}")]
     Other(String),
+}
+
+pub trait Switch: Clone + Send + Sync {
+    /// Returns the port associated with the new switch device
+    fn connect<P: SwitchPort + 'static>(&self, port: P) -> usize;
+
+    /// Process a packet, sending it to the correct device
+    fn process(&self, port: usize, pkt: Vec<u8>) -> Result<(), ProtocolError>;
+}
+
+/// A `SwitchPort` represents a device that can be connected to a switch
+pub trait SwitchPort: Send + Sync {
+    /// Places a packet in the device's receive queue
+    ///
+    /// ### Arguments
+    /// * `frame` - Ethernet frame header
+    /// * `pkt` - Ethernet frame payload
+    fn enqueue(&self, frame: EthernetFrame, pkt: Vec<u8>);
 }
 
 /// Computes the checksum used in various networking protocols

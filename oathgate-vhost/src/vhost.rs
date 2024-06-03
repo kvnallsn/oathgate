@@ -3,7 +3,7 @@
 use std::{io, path::PathBuf};
 
 use mio::{event::Source, net::UnixListener, Events, Interest, Poll, Token};
-use oathgate_net::router::Switch;
+use oathgate_net::Switch;
 
 use crate::{device::{DeviceOpts, VirtioDevice}, error::AppResult};
 
@@ -25,7 +25,7 @@ impl VHostSocket {
         Ok(Self { socket })
     }
 
-    pub fn accept_and_spawn(&mut self, device_opts: DeviceOpts, switch: Switch) -> AppResult<()> {
+    pub fn accept_and_spawn<S: Switch + 'static>(&mut self, device_opts: DeviceOpts, switch: S) -> AppResult<()> {
         let (strm, _peer) = self.socket.accept()?;
         tracing::info!("[vhost] accepted unix socket connection, spawning device");
 
@@ -34,7 +34,7 @@ impl VHostSocket {
         Ok(())
     }
 
-    pub fn run(&mut self, device_opts: DeviceOpts, switch: Switch) -> io::Result<()> {
+    pub fn run<S: Switch + 'static>(&mut self, device_opts: DeviceOpts, switch: S) -> io::Result<()> {
         let listener_token = Token(0);
 
         let mut poll = Poll::new()?;

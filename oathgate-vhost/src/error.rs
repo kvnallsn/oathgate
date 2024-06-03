@@ -3,7 +3,6 @@
 use std::num::TryFromIntError;
 
 use nix::errno::Errno;
-use oathgate_net::{router::RouterError, ProtocolError};
 
 /// Helper type for application errors
 pub type AppResult<T> = std::result::Result<T, Error>;
@@ -85,10 +84,4 @@ pub enum Error {
 
     #[error("virtio: {0}")]
     Virtio(#[from] virtio_queue::Error),
-
-    #[error("protocol failed: {0}")]
-    Protocol(#[from] ProtocolError),
-
-    #[error("router: {0}")]
-    Router(#[from] RouterError),
 }

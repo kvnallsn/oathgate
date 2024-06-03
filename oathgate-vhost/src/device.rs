@@ -17,10 +17,7 @@ use nix::{
     },
     unistd,
 };
-use oathgate_net::{
-    router::{SwitchPort, Switch},
-    EthernetFrame, EthernetPacket,
-};
+use oathgate_net::{EthernetFrame, EthernetPacket, Switch, SwitchPort};
 use parking_lot::lock_api::Mutex;
 use vm_memory::{GuestAddress, GuestMemoryAtomic, GuestMemoryMmap, GuestRegionMmap, MmapRegion};
 
@@ -157,7 +154,7 @@ pub enum KickFd {
 
 /// A VirtioDevice is the Virio device that will respond to the virtio-host-net driver
 /// running in the Qemu VM.
-pub struct VirtioDevice {
+pub struct VirtioDevice<S> {
     /// Instance of mio poller
     poll: Poll,
 
@@ -165,7 +162,7 @@ pub struct VirtioDevice {
     channel: Option<File>,
 
     /// All virtqueues/vrings current running
-    queues: Vec<VirtQueue>,
+    queues: Vec<VirtQueue<S>>,
 
     /// Mapping of guest physical memory address to hypervisor virtual addresses
     mappings: Vec<GuestMapping>,
@@ -221,12 +218,12 @@ impl SwitchPort for VirtioDeviceRxQueue {
     }
 }
 
-impl VirtioDevice {
+impl<S: Switch + 'static> VirtioDevice<S> {
     /// Creates a new VirtioDevice with the requested number of tx/rx virtqueue pairs
     ///
     /// ### Arguments
     /// * `num_queues` - Number of trasmit/receive virtqueue pairs for thsi device
-    pub fn new(switch: Switch, opts: DeviceOpts) -> AppResult<Self> {
+    pub fn new(switch: S, opts: DeviceOpts) -> AppResult<Self> {
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), TOKEN_WAKE)?;
         let rx = VirtioDeviceRxQueue {
@@ -885,7 +882,7 @@ impl VirtioDevice {
     ///
     /// ### Arguments
     /// * `idx` - Reference to a virtqueue at the specified index
-    fn get_virtqueue_mut(&mut self, idx: usize) -> AppResult<&mut VirtQueue> {
+    fn get_virtqueue_mut(&mut self, idx: usize) -> AppResult<&mut VirtQueue<S>> {
         self.queues.get_mut(idx).ok_or(Error::QueueNotFound(idx))
     }
 }

@@ -7,8 +7,9 @@ use std::{
 };
 
 use nix::sys::socket::{sendmsg, MsgFlags, SockaddrIn, SockaddrIn6};
+use oathgate_net::Ipv4Packet;
 
-use crate::{Ipv4Packet, router::{RouterError, RouterHandle}};
+use crate::router::{RouterError, RouterHandle};
 
 use super::{Wan, WanHandle};
 

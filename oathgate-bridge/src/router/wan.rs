@@ -4,7 +4,7 @@ mod tap;
 mod udp;
 mod wireguard;
 
-use crate::Ipv4Packet;
+use oathgate_net::Ipv4Packet;
 
 pub use self::{tap::TunTap, udp::UdpDevice, wireguard::{WgConfig, WgDevice}};
 

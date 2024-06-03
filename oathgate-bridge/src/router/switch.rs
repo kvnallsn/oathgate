@@ -8,12 +8,12 @@ use flume::Sender;
 use parking_lot::RwLock;
 use pcap_file::pcap::{PcapPacket, PcapWriter};
 
-use crate::{types::MacAddress, EthernetFrame, ProtocolError};
+use oathgate_net::{types::MacAddress, EthernetFrame, ProtocolError, Switch, SwitchPort};
 
 use super::{RouterError, ETHERNET_HDR_SZ};
 
 #[derive(Clone, Default)]
-pub struct Switch {
+pub struct VirtioSwitch {
     /// Handles to devices connected to switch ports
     ports: Arc<RwLock<Vec<Box<dyn SwitchPort>>>>,
 
@@ -24,22 +24,12 @@ pub struct Switch {
     logger: PcapLogger,
 }
 
-/// A `SwitchPort` represents a device that can be connected to a switch
-pub trait SwitchPort: Send + Sync {
-    /// Places a packet in the device's receive queue
-    ///
-    /// ### Arguments
-    /// * `frame` - Ethernet frame header
-    /// * `pkt` - Ethernet frame payload
-    fn enqueue(&self, frame: EthernetFrame, pkt: Vec<u8>);
-}
-
 #[derive(Clone, Debug, Default)]
 struct PcapLogger {
     tx: Option<Sender<Vec<u8>>>,
 }
 
-impl Switch {
+impl VirtioSwitch {
     /// Creates a new, empty switch with no ports connected
     pub fn new(pcap: Option<PathBuf>) -> Result<Self, RouterError> {
         let logger = PcapLogger::new(pcap)?;
@@ -49,11 +39,36 @@ impl Switch {
         })
     }
 
+    fn associate_port(&self, port: usize, mac: MacAddress) {
+        let mut cache = self.cache.write();
+
+        // associate MAC address of source with port
+        match cache.insert(mac, port) {
+            Some(old_port) if port == old_port => { /* do nothing, no port change */ }
+            Some(old_port) => {
+                tracing::trace!(
+                    port,
+                    old_port,
+                    "[switch] associating mac ({}) with new port",
+                    mac
+                )
+            }
+            None => tracing::trace!("[switch] associating mac ({}) with port {}", mac, port),
+        }
+    }
+
+    fn get_port(&self, mac: MacAddress) -> Option<usize> {
+        let cache = self.cache.read();
+        cache.get(&mac).map(|port| *port)
+    }
+}
+
+impl Switch for VirtioSwitch {
     /// Connects a new device to the router, returning the port it is connected to
     ///
     /// ### Arguments
     /// * `port` - Device to connect to this switch
-    pub fn connect<P: SwitchPort + 'static>(&self, port: P) -> usize {
+    fn connect<P: SwitchPort + 'static>(&self, port: P) -> usize {
         let mut ports = self.ports.write();
         let idx = ports.len();
         ports.push(Box::new(port));
@@ -67,7 +82,7 @@ impl Switch {
     /// ### Arguments
     /// * `port` - Port id this packet was sent from
     /// * `pkt` - Ethernet Framed packet (Layer 2)
-    pub fn process(&self, port: usize, mut pkt: Vec<u8>) -> Result<(), ProtocolError> {
+    fn process(&self, port: usize, mut pkt: Vec<u8>) -> Result<(), ProtocolError> {
         if pkt.len() < ETHERNET_HDR_SZ {
             return Err(ProtocolError::NotEnoughData(pkt.len(), ETHERNET_HDR_SZ));
         }
@@ -101,29 +116,6 @@ impl Switch {
         }
 
         Ok(())
-    }
-
-    fn associate_port(&self, port: usize, mac: MacAddress) {
-        let mut cache = self.cache.write();
-
-        // associate MAC address of source with port
-        match cache.insert(mac, port) {
-            Some(old_port) if port == old_port => { /* do nothing, no port change */ }
-            Some(old_port) => {
-                tracing::trace!(
-                    port,
-                    old_port,
-                    "[switch] associating mac ({}) with new port",
-                    mac
-                )
-            }
-            None => tracing::trace!("[switch] associating mac ({}) with port {}", mac, port),
-        }
-    }
-
-    fn get_port(&self, mac: MacAddress) -> Option<usize> {
-        let cache = self.cache.read();
-        cache.get(&mac).map(|port| *port)
     }
 }
 

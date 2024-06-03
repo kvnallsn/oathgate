@@ -1,14 +1,11 @@
 //! VirtQueue implementation
 
 use std::{
-    fs::File,
-    io::{Read, Write},
-    ops::Deref,
-    os::fd::{FromRawFd, RawFd},
+    fs::File, io::{Read, Write}, ops::Deref, os::fd::{FromRawFd, RawFd}, 
 };
 
 use nix::unistd;
-use oathgate_net::router::Switch;
+use oathgate_net::Switch;
 use virtio_queue::{Queue, QueueOwnedT, QueueT};
 use vm_memory::{GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap};
 
@@ -17,7 +14,7 @@ use crate::{
     types::{DeviceRxQueue, VirtioNetHeader},
 };
 
-pub struct VirtQueue {
+pub struct VirtQueue<S> {
     enabled: bool,
     queue: Queue,
     mem: Option<GuestMemoryAtomic<GuestMemoryMmap<()>>>,
@@ -27,18 +24,18 @@ pub struct VirtQueue {
     err_fd: Option<RawFd>,
     call_fd: Option<File>,
     kick_fd: Option<RawFd>,
-    switch: Switch,
+    switch: S,
     pending: DeviceRxQueue,
 }
 
-impl VirtQueue {
+impl<S: Switch> VirtQueue<S> {
     /// Creates a new VirtQueue with a the specified max virtqueue size
     ///
     /// ### Arguments
     /// * `max_size` - Maximum size of the virtqueue
     pub fn new(
         max_size: u16,
-        switch: Switch,
+        switch: S,
         rx_queue: DeviceRxQueue,
     ) -> Result<Self, virtio_queue::Error> {
         Ok(Self {
@@ -193,7 +190,7 @@ impl VirtQueue {
             tracing::trace!(?idx, "[kick-tx] header: {hdr:02x?}");
             tracing::trace!(?idx, "[kick-tx] data: {pkt:02x?}");
 
-            self.switch.process(switch_port, pkt)?;
+            self.switch.process(switch_port, pkt).unwrap();
 
             self.queue.add_used(mem.deref(), head_idx, len as u32)?;
         }

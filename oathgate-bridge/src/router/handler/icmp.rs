@@ -1,10 +1,12 @@
 //! ICMP Protocol Handler
 
-use crate::{
-    checksum, protocols::{
+use oathgate_net::{
+    checksum,
+    protocols::{
         icmp::{ICMP_HDR_SZ, ICMP_TY_ECHO_REPLY, ICMP_TY_ECHO_REQUEST},
         NET_PROTOCOL_ICMP,
-    }, Ipv4Packet, ProtocolError
+    },
+    Ipv4Packet, ProtocolError,
 };
 
 use super::ProtocolHandler;

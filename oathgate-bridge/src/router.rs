@@ -10,14 +10,14 @@ use std::{
 };
 
 use flume::{Receiver, Sender};
-
-pub use self::switch::{Switch, SwitchPort};
-
-use crate::{
+use oathgate_net::{
     protocols::ArpPacket,
     types::{EtherType, MacAddress, NetworkAddress},
     EthernetFrame, EthernetPacket, Ipv4Packet, ProtocolError,
+    SwitchPort, Switch
 };
+
+pub use self::switch::VirtioSwitch;
 
 use self::{
     handler::ProtocolHandler,
@@ -45,7 +45,7 @@ pub struct RouterHandle {
 
 pub struct Router {
     arp: HashMap<IpAddr, MacAddress>,
-    switch: Switch,
+    switch: VirtioSwitch,
     port: usize,
     wan: Option<Box<dyn WanHandle>>,
     mac: MacAddress,
@@ -110,7 +110,7 @@ impl RouterBuilder {
     ///
     /// ### Arguments
     /// * `ip4` - IPv4 address to assign to this router
-    pub fn spawn<I: Into<Ipv4Addr>>(self, ip4: I, switch: Switch) -> std::io::Result<()> {
+    pub fn spawn<I: Into<Ipv4Addr>>(self, ip4: I, switch: VirtioSwitch) -> std::io::Result<()> {
         let network = NetworkAddress::new(ip4.into(), 24);
 
         let (tx, rx) = flume::unbounded();

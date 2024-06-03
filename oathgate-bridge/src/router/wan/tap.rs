@@ -9,16 +9,17 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    router::{RouterError, RouterHandle},
-    types::MacAddress,
-    Ipv4Packet,
-};
+use crate::router::{RouterError, RouterHandle};
+
 use flume::{Receiver, Sender};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token, Waker};
 use nix::{
     libc::{IFF_NO_PI, IFF_TAP, IFF_TUN, IFNAMSIZ, SIOCGIFHWADDR},
     net::if_::if_nametoindex,
+};
+use oathgate_net::{
+    types::MacAddress,
+    Ipv4Packet,
 };
 
 use super::{Wan, WanHandle};
