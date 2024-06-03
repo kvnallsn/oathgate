@@ -1,21 +1,17 @@
 use std::{
     fs::File,
-    io::{self, Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::thread::JoinHandleExt,
-    },
+    io::{Read, Write},
+    os::{fd::AsRawFd, unix::thread::JoinHandleExt},
     path::PathBuf,
     sync::Arc,
-    time::Duration,
 };
 
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
+use events::EventHandler;
 use mio::{
     unix::{pipe::Receiver, SourceFd},
     Events, Interest, Poll, Token,
@@ -40,6 +36,7 @@ use tracing::Level;
 use tui_term::{vt100, widget::PseudoTerminal};
 use vm::VmHandle;
 
+mod events;
 mod vm;
 
 type Error = Box<dyn std::error::Error + 'static>;
@@ -166,66 +163,17 @@ fn run_tui<W: Write>(pty: VT100, mut stdin: W) -> Result<(), Error> {
 
     terminal.clear()?;
 
+    let mut events = EventHandler::default();
     let mut should_quit = false;
     while !should_quit {
         terminal.draw(|f| ui(f, pty.read().screen()))?;
-        should_quit = handle_events(&pty, &mut stdin)?;
+        should_quit = events.handle(&pty, &mut stdin)?;
     }
 
     crossterm::terminal::disable_raw_mode()?;
     std::io::stdout().execute(LeaveAlternateScreen)?;
 
     Ok(())
-}
-
-fn handle_events<W: Write>(pty: &VT100, stdin: &mut W) -> io::Result<bool> {
-    if event::poll(Duration::from_millis(50))? {
-        match event::read()? {
-            Event::Key(key) => match key.kind {
-                KeyEventKind::Press => {
-                    return handle_key_press(key, stdin);
-                }
-                KeyEventKind::Repeat => (),
-                KeyEventKind::Release => (),
-            },
-            Event::Resize(width, height) => {
-                resize_term(height, width, pty);
-            }
-            _ => (),
-        }
-    }
-
-    Ok(false)
-}
-
-fn handle_key_press<W: Write>(key: KeyEvent, stdin: &mut W) -> io::Result<bool> {
-    match key.code {
-        KeyCode::F(4) => {
-            return Ok(true);
-        }
-        KeyCode::Char(c) => {
-            let mut b = [0u8; 4];
-            let s = c.encode_utf8(&mut b);
-            stdin.write_all(s.as_bytes())?;
-        }
-        KeyCode::Esc => stdin.write_all(&[0x1B])?,
-        KeyCode::Enter => stdin.write_all(&[0x0A])?,
-        KeyCode::Backspace => stdin.write_all(&[0x08])?,
-        KeyCode::Delete => stdin.write_all(&[0x7F])?,
-        KeyCode::Up => stdin.write_all(&[0x1B, 0x5B, 0x41])?,
-        KeyCode::Down => stdin.write_all(&[0x1B, 0x5B, 0x42])?,
-        KeyCode::Right => stdin.write_all(&[0x1B, 0x5B, 0x43])?,
-        KeyCode::Left => stdin.write_all(&[0x1B, 0x5B, 0x44])?,
-        _key => (),
-    }
-
-    stdin.flush()?;
-
-    Ok(false)
-}
-
-fn resize_term(rows: u16, cols: u16, pty: &VT100) {
-    pty.write().set_size(rows, cols);
 }
 
 fn ui(frame: &mut Frame, screen: &vt100::Screen) {
