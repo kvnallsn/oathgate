@@ -10,7 +10,7 @@ use pcap_file::pcap::{PcapPacket, PcapWriter};
 
 use oathgate_net::{types::MacAddress, EthernetFrame, ProtocolError, Switch, SwitchPort};
 
-use super::{RouterError, ETHERNET_HDR_SZ};
+use super::{NetworkError, ETHERNET_HDR_SZ};
 
 #[derive(Clone, Default)]
 pub struct VirtioSwitch {
@@ -31,7 +31,10 @@ struct PcapLogger {
 
 impl VirtioSwitch {
     /// Creates a new, empty switch with no ports connected
-    pub fn new(pcap: Option<PathBuf>) -> Result<Self, RouterError> {
+    ///
+    /// ### Arguments
+    /// * `pcap` - Path to pcap file on disk, or None to disable pcap
+    pub fn new(pcap: Option<PathBuf>) -> Result<Self, NetworkError> {
         let logger = PcapLogger::new(pcap)?;
         Ok(Self {
             logger,
@@ -39,6 +42,11 @@ impl VirtioSwitch {
         })
     }
 
+    /// Maps a switch port to a MAC address for later retrieval
+    ///
+    /// ### Arguments
+    /// * `port` - Switch port number
+    /// * `mac` - MAC address to associate with port
     fn associate_port(&self, port: usize, mac: MacAddress) {
         let mut cache = self.cache.write();
 
@@ -57,6 +65,7 @@ impl VirtioSwitch {
         }
     }
 
+    /// Returns the switch port associated with a MAC address, or None if no port was found
     fn get_port(&self, mac: MacAddress) -> Option<usize> {
         let cache = self.cache.read();
         cache.get(&mac).map(|port| *port)
@@ -120,7 +129,7 @@ impl Switch for VirtioSwitch {
 }
 
 impl PcapLogger {
-    pub fn new(path: Option<PathBuf>) -> Result<Self, RouterError> {
+    pub fn new(path: Option<PathBuf>) -> Result<Self, NetworkError> {
         match path {
             Some(path) => {
                 let tx = Self::spawn(path)?;
@@ -130,7 +139,7 @@ impl PcapLogger {
         }
     }
 
-    fn spawn(path: PathBuf) -> Result<Sender<Vec<u8>>, RouterError> {
+    fn spawn(path: PathBuf) -> Result<Sender<Vec<u8>>, NetworkError> {
         let file = File::options().create(true).write(true).open(path)?;
 
         let mut writer = PcapWriter::new(file)?;

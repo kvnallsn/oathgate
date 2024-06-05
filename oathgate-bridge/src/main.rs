@@ -1,6 +1,6 @@
 mod config;
 mod error;
-mod router;
+mod net;
 
 use std::{io::Read, net::SocketAddr, path::PathBuf};
 
@@ -16,11 +16,14 @@ use tracing::Level;
 use crate::{
     config::WanConfig,
     error::Error,
-    router::{
-        handler::IcmpHandler,
+    net::{
+        router::{
+            handler::IcmpHandler,
+            Router,
+        },
+        switch::VirtioSwitch,
         wan::{TunTap, UdpDevice, Wan, WgDevice},
-        Router, VirtioSwitch,
-    },
+    }
 };
 
 #[derive(Parser)]

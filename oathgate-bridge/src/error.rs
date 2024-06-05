@@ -13,8 +13,8 @@ pub enum Error {
     #[error("i/o: {0}")]
     IO(#[from] std::io::Error),
 
-    #[error("router: {0}")]
-    Router(#[from] crate::router::RouterError),
+    #[error("network: {0}")]
+    Network(#[from] crate::net::NetworkError),
 
     #[error("{0}")]
     Other(Cow<'static, str>),

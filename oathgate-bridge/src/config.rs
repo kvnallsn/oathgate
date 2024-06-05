@@ -9,7 +9,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::router::wan::WgConfig;
+use crate::net::wan::WgConfig;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {

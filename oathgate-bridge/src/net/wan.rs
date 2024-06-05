@@ -8,17 +8,17 @@ use oathgate_net::Ipv4Packet;
 
 pub use self::{tap::TunTap, udp::UdpDevice, wireguard::{WgConfig, WgDevice}};
 
-use super::{RouterError, RouterHandle};
+use super::{router::RouterHandle, NetworkError};
 
 pub trait Wan: Send + Sync
 where
     Self: 'static,
 {
-    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, RouterError>;
+    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, NetworkError>;
 
-    fn run(self: Box<Self>, router: RouterHandle) -> Result<(), RouterError>;
+    fn run(self: Box<Self>, router: RouterHandle) -> Result<(), NetworkError>;
 
-    fn spawn(self: Box<Self>, router: RouterHandle) -> Result<Box<dyn WanHandle>, RouterError> {
+    fn spawn(self: Box<Self>, router: RouterHandle) -> Result<Box<dyn WanHandle>, NetworkError> {
         let handle = self.as_wan_handle()?;
 
         std::thread::Builder::new()
@@ -34,5 +34,5 @@ where
 
 pub trait WanHandle: Send + Sync {
     /// Writes a packet to the upstream device
-    fn write(&self, pkt: Ipv4Packet) -> Result<(), RouterError>;
+    fn write(&self, pkt: Ipv4Packet) -> Result<(), NetworkError>;
 }

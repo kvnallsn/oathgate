@@ -9,7 +9,7 @@ use std::{
 use nix::sys::socket::{sendmsg, MsgFlags, SockaddrIn, SockaddrIn6};
 use oathgate_net::Ipv4Packet;
 
-use crate::router::{RouterError, RouterHandle};
+use crate::net::{router::RouterHandle, NetworkError};
 
 use super::{Wan, WanHandle};
 
@@ -35,7 +35,7 @@ impl Wan for UdpDevice
 where
     Self: Sized,
 {
-    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, RouterError> {
+    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, NetworkError> {
         let handle = UdpDeviceHandle {
             sock: self.sock.as_raw_fd(),
             dests: self.dests.clone(),
@@ -44,7 +44,7 @@ where
         Ok(Box::new(handle))
     }
 
-    fn run(self: Box<Self>, router: RouterHandle) -> Result<(), RouterError> {
+    fn run(self: Box<Self>, router: RouterHandle) -> Result<(), NetworkError> {
         let mut buf = [0u8; 1600];
         loop {
             let (sz, peer) = self.sock.recv_from(&mut buf)?;
@@ -63,7 +63,7 @@ where
 }
 
 impl WanHandle for UdpDeviceHandle {
-    fn write(&self, pkt: Ipv4Packet) -> Result<(), RouterError> {
+    fn write(&self, pkt: Ipv4Packet) -> Result<(), NetworkError> {
         let iov = [IoSlice::new(&pkt.as_bytes())];
 
         for dest in &self.dests {

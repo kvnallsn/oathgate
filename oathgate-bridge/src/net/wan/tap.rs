@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::router::{RouterError, RouterHandle};
+use crate::net::{router::RouterHandle, NetworkError};
 
 use flume::{Receiver, Sender};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token, Waker};
@@ -17,10 +17,7 @@ use nix::{
     libc::{IFF_NO_PI, IFF_TAP, IFF_TUN, IFNAMSIZ, SIOCGIFHWADDR},
     net::if_::if_nametoindex,
 };
-use oathgate_net::{
-    types::MacAddress,
-    Ipv4Packet,
-};
+use oathgate_net::{types::MacAddress, Ipv4Packet};
 
 use super::{Wan, WanHandle};
 
@@ -72,7 +69,7 @@ impl TunTap {
     /// Creates a new tap device
     ///
     /// Note: This requires administration privileges or CAP_NET_ADMIN
-    pub fn create_tap(name: String) -> Result<Self, RouterError> {
+    pub fn create_tap(name: String) -> Result<Self, NetworkError> {
         Self::create(name, IFF_TAP)
     }
 
@@ -80,11 +77,11 @@ impl TunTap {
     ///
     /// Note: This requires administration privileges or CAP_NET_ADMIN
     #[allow(dead_code)]
-    pub fn create_tun(name: String) -> Result<Self, RouterError> {
+    pub fn create_tun(name: String) -> Result<Self, NetworkError> {
         Self::create(name, IFF_TUN)
     }
 
-    fn create(name: String, flags: i32) -> Result<Self, RouterError> {
+    fn create(name: String, flags: i32) -> Result<Self, NetworkError> {
         // #define TUNSETIFF _IOW('T', 202, int)
         nix::ioctl_write_int!(tunsetiff, b'T', 202);
 
@@ -96,7 +93,7 @@ impl TunTap {
 
         let len = name.len();
         if len > IFNAMSIZ {
-            return Err(RouterError::Generic(Cow::Owned(format!(
+            return Err(NetworkError::Generic(Cow::Owned(format!(
                 "device name ({name}) is too long, max length is {IFNAMSIZ}, provided length {len}",
             ))))?;
         }
@@ -162,7 +159,7 @@ impl Debug for TunTap {
 }
 
 impl Wan for TunTap {
-    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, RouterError> {
+    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, NetworkError> {
         let waker = Waker::new(self.poll.registry(), TOKEN_WRITE)?;
         self.poll.registry().register(
             &mut SourceFd(&self.fd.as_raw_fd()),
@@ -178,7 +175,7 @@ impl Wan for TunTap {
         Ok(Box::new(handle))
     }
 
-    fn run(mut self: Box<Self>, _router: RouterHandle) -> Result<(), RouterError> {
+    fn run(mut self: Box<Self>, _router: RouterHandle) -> Result<(), NetworkError> {
         let mut events = Events::with_capacity(MAX_EVENTS_CAPACITY);
 
         let rx = self.rx.take().unwrap();
@@ -216,7 +213,7 @@ impl Wan for TunTap {
 }
 
 impl WanHandle for TunTapHandle {
-    fn write(&self, pkt: Ipv4Packet) -> Result<(), RouterError> {
+    fn write(&self, pkt: Ipv4Packet) -> Result<(), NetworkError> {
         self.tx.send(pkt).ok();
         self.waker.wake().ok();
         Ok(())

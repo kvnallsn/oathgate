@@ -26,8 +26,7 @@ use oathgate_net::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::router::{RouterError, RouterHandle};
-
+use crate::net::{NetworkError, router::RouterHandle};
 
 use super::{Wan, WanHandle};
 
@@ -89,7 +88,7 @@ impl WgDevice {
     ///
     /// ### Arguments
     /// * `cfg` - WireGuard configuration
-    pub fn create(cfg: WgConfig) -> Result<Self, RouterError> {
+    pub fn create(cfg: WgConfig) -> Result<Self, NetworkError> {
         use base64::prelude::BASE64_STANDARD;
 
         let mut key = [0u8; 32];
@@ -101,7 +100,7 @@ impl WgDevice {
         let peer = PublicKey::from(peer);
 
         let tun = Tunn::new(key, peer, None, None, 1, None)
-            .map_err(|e| RouterError::Generic(Cow::Borrowed(e)))?;
+            .map_err(|e| NetworkError::Generic(Cow::Borrowed(e)))?;
 
         let poll = Poll::new()?;
         let waker = Waker::new(poll.registry(), TOKEN_WAKER)?;
@@ -132,7 +131,7 @@ impl WgDevice {
         action: TunnResult,
         router: &RouterHandle,
         sock: &UdpSocket,
-    ) -> Result<bool, RouterError> {
+    ) -> Result<bool, NetworkError> {
         let mut to_network = false;
 
         match action {
@@ -176,11 +175,11 @@ impl WgDevice {
 }
 
 impl Wan for WgDevice {
-    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, RouterError> {
+    fn as_wan_handle(&self) -> Result<Box<dyn WanHandle>, NetworkError> {
         Ok(Box::new(self.handle.clone()))
     }
 
-    fn run(mut self: Box<Self>, router: RouterHandle) -> Result<(), RouterError> {
+    fn run(mut self: Box<Self>, router: RouterHandle) -> Result<(), NetworkError> {
         let sock = std::net::UdpSocket::bind("0.0.0.0:0")?;
         sock.set_nonblocking(true)?;
         let mut sock = UdpSocket::from_std(sock);
@@ -203,7 +202,7 @@ impl Wan for WgDevice {
         )?;
 
         let rx = self.rx.take().ok_or_else(|| {
-            RouterError::Generic(String::from("wireguard missing receiver").into())
+            NetworkError::Generic(String::from("wireguard missing receiver").into())
         })?;
 
         // Handle packets / messages
@@ -281,7 +280,7 @@ impl Wan for WgDevice {
 }
 
 impl WanHandle for WgHandle {
-    fn write(&self, pkt: Ipv4Packet) -> Result<(), RouterError> {
+    fn write(&self, pkt: Ipv4Packet) -> Result<(), NetworkError> {
         self.tx.send(pkt)?;
         self.waker.wake()?;
         Ok(())

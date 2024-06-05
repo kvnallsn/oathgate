@@ -1,30 +1,28 @@
 //! Simple L3 Router
 
-mod switch;
-
 pub mod handler;
-pub mod wan;
 
 use std::{
-    borrow::Cow, collections::HashMap, net::{IpAddr, Ipv4Addr}
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr},
 };
 
 use flume::{Receiver, Sender};
 use oathgate_net::{
     protocols::ArpPacket,
     types::{EtherType, MacAddress, NetworkAddress},
-    EthernetFrame, EthernetPacket, Ipv4Packet, ProtocolError,
-    SwitchPort, Switch
+    EthernetFrame, EthernetPacket, Ipv4Packet, ProtocolError, Switch, SwitchPort,
 };
 
-pub use self::switch::VirtioSwitch;
-
-use self::{
-    handler::ProtocolHandler,
+pub use crate::net::{
+    switch::VirtioSwitch,
     wan::{Wan, WanHandle},
 };
 
-const ETHERNET_HDR_SZ: usize = 14;
+use self::handler::ProtocolHandler;
+
+use super::NetworkError;
+
 const IPV4_HDR_SZ: usize = 20;
 
 pub enum RouterMsg {
@@ -62,34 +60,9 @@ pub struct RouterBuilder {
     wan: Option<Box<dyn Wan>>,
 }
 
-/// Collection of errors that may occur during routing/switching packets
-#[derive(Debug, thiserror::Error)]
-pub enum RouterError {
-    #[error("router: {0}")]
-    Generic(Cow<'static, str>),
-
-    #[error("nix: {0}")]
-    Errno(#[from] nix::errno::Errno),
-
-    #[error("i/o: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("protocol failed: {0}")]
-    Protocol(#[from] ProtocolError),
-
-    #[error("pcap: {0}")]
-    Pcap(#[from] pcap_file::PcapError),
-
-    #[error("unable to decode base64: {0}")]
-    DecodeSlice(#[from] base64::DecodeSliceError),
-
-    #[error("sender channel closed")]
-    ChannelClosed,
-}
-
-impl<T> From<flume::SendError<T>> for RouterError {
+impl<T> From<flume::SendError<T>> for NetworkError {
     fn from(_: flume::SendError<T>) -> Self {
-        Self::ChannelClosed 
+        Self::ChannelClosed
     }
 }
 
@@ -242,7 +215,7 @@ impl Router {
         }
     }
 
-    fn forward_packet(&mut self, pkt: Ipv4Packet) -> Result<(), RouterError> {
+    fn forward_packet(&mut self, pkt: Ipv4Packet) -> Result<(), NetworkError> {
         if let Some(ref wan) = self.wan {
             if let Err(error) = wan.write(pkt) {
                 tracing::warn!(?error, "unable to write to wan, dropping packet");
@@ -253,6 +226,7 @@ impl Router {
         Ok(())
     }
 
+    /// Routes an IPv4 packet to the appropriate destination
     fn route_ip4(&mut self, pkt: Ipv4Packet) -> Result<RouterAction, ProtocolError> {
         match self.network.contains(pkt.dest()) {
             true => match self.is_local(pkt.dest()) {
@@ -321,11 +295,11 @@ impl Router {
 }
 
 impl RouterHandle {
-    fn route_ipv4(&self, pkt: Ipv4Packet) {
+    pub fn route_ipv4(&self, pkt: Ipv4Packet) {
         self.tx.send(RouterMsg::Wan4(pkt)).ok();
     }
 
-    fn route_ipv6(&self, _pkt: Vec<u8>) {
+    pub fn route_ipv6(&self, _pkt: Vec<u8>) {
         tracing::warn!("[router] no ipv6 support");
     }
 }
