@@ -9,6 +9,8 @@ use rand::RngCore;
 
 use crate::{cast, ProtocolError};
 
+const BROADCAST4: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EtherType {
     IPv4 = 0x0800,
@@ -256,6 +258,7 @@ impl NetworkAddress {
     }
 
     /// Returns true of the provided IP address is contained in this network
+    /// or if the address is the univeral broadcast address (i.e. 255.255.255.255)
     ///
     /// If an IPv6 address is passed to an IPv4 network, returns false.
     /// If an IPv4 address is passed to an IPv6 network, returns false.
@@ -264,6 +267,7 @@ impl NetworkAddress {
     /// * `ip` - IP address to check if in cidr / network
     pub fn contains<I: Into<IpAddr>>(&self, ip: I) -> bool {
         match (ip.into(), self.mask) {
+            (IpAddr::V4(BROADCAST4), _) => true,
             (IpAddr::V4(ip), IpAddr::V4(mask)) => (ip & mask) == self.network(),
             (IpAddr::V6(ip), IpAddr::V6(mask)) => (ip & mask) == self.network(),
             (_, _) => false,
