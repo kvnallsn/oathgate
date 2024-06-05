@@ -7,6 +7,7 @@ edition = "2021"
 base64 = "0.22.1"
 boringtun = "0.6.0"
 clap = { workspace = true }
+dhcproto = "0.11.0"
 flume = { workspace = true }
 mio = { workspace = true }
 nix = { workspace = true }

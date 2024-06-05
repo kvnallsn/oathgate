@@ -24,10 +24,11 @@ use self::handler::ProtocolHandler;
 use super::NetworkError;
 
 const IPV4_HDR_SZ: usize = 20;
+const BROADCAST4: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);
 
 pub enum RouterMsg {
-    Lan(EthernetPacket),
-    Wan4(Ipv4Packet),
+    FromLan(EthernetPacket),
+    FromWan4(Ipv4Packet),
 }
 
 pub enum RouterAction {
@@ -128,14 +129,14 @@ impl Router {
     pub fn run(mut self, rx: Receiver<RouterMsg>) {
         loop {
             match rx.recv() {
-                Ok(RouterMsg::Lan(pkt)) => match self.route(pkt.frame.ethertype, pkt.payload) {
+                Ok(RouterMsg::FromLan(pkt)) => match self.route(pkt) {
                     Ok(_) => (),
                     Err(error) => tracing::warn!(?error, "unable to route lan packet"),
                 },
-                Ok(RouterMsg::Wan4(pkt)) => {
+                Ok(RouterMsg::FromWan4(pkt)) => {
                     if let Err(error) = self
                         .route_ip4(pkt)
-                        .and_then(|action| self.handle_action(action))
+                        .and_then(|action| self.handle_action(action, None))
                     {
                         tracing::warn!(?error, "unable to route wan packet");
                     }
@@ -155,27 +156,35 @@ impl Router {
     /// ### Arguments
     /// * `ethertype` - What type of data is contained in the packet
     /// * `pkt` - Packet data (based on ethertype)
-    fn route(&mut self, ethertype: EtherType, pkt: Vec<u8>) -> Result<(), ProtocolError> {
-        let action = match ethertype {
-            EtherType::ARP => self.handle_arp(pkt),
+    fn route(&mut self, pkt: EthernetPacket) -> Result<(), ProtocolError> {
+        let action = match pkt.frame.ethertype {
+            EtherType::ARP => self.handle_arp(pkt.payload),
             EtherType::IPv4 => {
-                let pkt = Ipv4Packet::parse(pkt)?;
+                let pkt = Ipv4Packet::parse(pkt.payload)?;
                 self.route_ip4(pkt)
             }
-            EtherType::IPv6 => self.route_ip6(pkt),
+            EtherType::IPv6 => self.route_ip6(pkt.payload),
         }?;
 
-        self.handle_action(action)
+        self.handle_action(action, Some(pkt.frame.src))
     }
 
-    fn handle_action(&mut self, action: RouterAction) -> Result<(), ProtocolError> {
+    fn handle_action(
+        &mut self,
+        action: RouterAction,
+        dst: Option<MacAddress>,
+    ) -> Result<(), ProtocolError> {
         match action {
-            RouterAction::ToLan(ethertype, dst, pkt) => match self.arp.get(&dst) {
-                Some(dst) => self.write_to_switch(*dst, ethertype, pkt),
-                None => {
-                    tracing::warn!(ip = ?dst, "[router] mac not found in arp cache, dropping packet")
+            RouterAction::ToLan(ethertype, dst_ip, pkt) => {
+                let dst = dst.or_else(|| self.arp.get(&dst_ip).copied());
+
+                match dst {
+                    Some(dst) => self.write_to_switch(dst, ethertype, pkt),
+                    None => {
+                        tracing::warn!(ip = ?dst_ip, "[router] mac not found in arp cache, dropping packet")
+                    }
                 }
-            },
+            }
             RouterAction::ToWan(pkt) => match self.forward_packet(pkt) {
                 Ok(_) => tracing::trace!("[router] forwarded packet"),
                 Err(error) => tracing::warn!(?error, "[router] unable to forward packet"),
@@ -186,10 +195,11 @@ impl Router {
         Ok(())
     }
 
-    /// Returns true if a packet is destined for this local device
-    fn is_local<A: Into<IpAddr>>(&self, dst: A) -> bool {
+    /// Returns true if a packet is destined for this local device or if
+    /// the it is a broadcast packet
+    fn is_local_or_broadcast<A: Into<IpAddr>>(&self, dst: A) -> bool {
         let dst = dst.into();
-        self.network == dst
+        self.network == dst || BROADCAST4 == dst
     }
 
     fn handle_arp(&mut self, pkt: Vec<u8>) -> Result<RouterAction, ProtocolError> {
@@ -203,7 +213,7 @@ impl Router {
         );
         self.arp.insert(arp.spa, arp.sha);
 
-        if self.is_local(arp.tpa) {
+        if self.is_local_or_broadcast(arp.tpa) {
             // responsd with router's mac
             let mut rpkt = vec![0u8; arp.size()];
             arp.to_reply(self.mac);
@@ -229,7 +239,7 @@ impl Router {
     /// Routes an IPv4 packet to the appropriate destination
     fn route_ip4(&mut self, pkt: Ipv4Packet) -> Result<RouterAction, ProtocolError> {
         match self.network.contains(pkt.dest()) {
-            true => match self.is_local(pkt.dest()) {
+            true => match self.is_local_or_broadcast(pkt.dest()) {
                 true => Ok(self.handle_local_ipv4(pkt)),
                 false => {
                     let dst = pkt.dest();
@@ -296,7 +306,7 @@ impl Router {
 
 impl RouterHandle {
     pub fn route_ipv4(&self, pkt: Ipv4Packet) {
-        self.tx.send(RouterMsg::Wan4(pkt)).ok();
+        self.tx.send(RouterMsg::FromWan4(pkt)).ok();
     }
 
     pub fn route_ipv6(&self, _pkt: Vec<u8>) {
@@ -307,6 +317,6 @@ impl RouterHandle {
 impl SwitchPort for RouterHandle {
     fn enqueue(&self, frame: EthernetFrame, pkt: Vec<u8>) {
         let pkt = EthernetPacket::new(frame, pkt);
-        self.tx.send(RouterMsg::Lan(pkt)).ok();
+        self.tx.send(RouterMsg::FromLan(pkt)).ok();
     }
 }

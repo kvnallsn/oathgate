@@ -18,7 +18,7 @@ use crate::{
     error::Error,
     net::{
         router::{
-            handler::IcmpHandler,
+            handler::{IcmpHandler, UdpHandler},
             Router,
         },
         switch::VirtioSwitch,
@@ -78,6 +78,7 @@ fn run(opts: Opts, cfg: Config) -> Result<(), Error> {
     let _router = Router::builder()
         .wan(wan)
         .register_proto_handler(IcmpHandler::default())
+        .register_proto_handler(UdpHandler::default())
         .spawn(cfg.router.ipv4, switch.clone())?;
 
     let mut poller = Poll::new()?;
