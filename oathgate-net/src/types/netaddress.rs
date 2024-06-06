@@ -14,13 +14,13 @@ pub enum IpNetwork {
     V6(Ipv6Network),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Ipv4Network {
     ip: Ipv4Addr,
     mask: Ipv4Addr,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Ipv6Network {
     ip: Ipv6Addr,
     mask: Ipv6Addr,
