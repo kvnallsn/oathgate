@@ -47,7 +47,7 @@ impl VmHandle {
             "-kernel",
             machine.kernel,
             "-append",
-            "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda reboot=k",
+            "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda1 reboot=k",
             "-nodefaults",
             "-no-user-config",
             "-nographic",
@@ -62,7 +62,7 @@ impl VmHandle {
             "node,memdev=mem",
             "-drive",
             format!(
-                "id=root,file={},format=raw,if=virtio",
+                "id=root,file={},if=virtio",
                 machine.disk.display()
             ),
             "-chardev",
