@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 nix = { workspace = true }
 rand = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
