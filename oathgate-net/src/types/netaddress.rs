@@ -2,154 +2,160 @@
 
 use std::{
     fmt::Display,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr},
     str::FromStr,
 };
 
 use serde::{de::Visitor, Deserialize, Serialize};
 
-const BROADCAST4: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);
-
 #[derive(Debug)]
-pub struct NetworkAddress {
-    ip: IpAddr,
-    mask: IpAddr,
+pub enum IpNetwork {
+    V4(Ipv4Network),
+    V6(Ipv6Network),
 }
 
-impl NetworkAddress {
-    /// Creates a new Classless Inter-Romain Routing (CIDR) address
+#[derive(Debug)]
+pub struct Ipv4Network {
+    ip: Ipv4Addr,
+    mask: Ipv4Addr,
+}
+
+#[derive(Debug)]
+pub struct Ipv6Network {
+    ip: Ipv6Addr,
+    mask: Ipv6Addr,
+}
+
+impl Ipv4Network {
+    /// Creats a new IPv4 network address (aka IP address with a subnet)
     ///
     /// ### Arguments
-    /// * `ip` - IP address component of the CIDR
-    /// * `mask` - Subnet mask of the CIDR
-    pub fn new<I: Into<IpAddr>>(ip: I, mask: u8) -> Self {
-        match ip.into() {
-            IpAddr::V4(ip) => Self::new_v4(ip, mask),
-            IpAddr::V6(ip) => Self::new_v6(ip, mask),
-        }
-    }
-
-    pub fn new_v4<I: Into<Ipv4Addr>>(ip: I, mask: u8) -> Self {
+    /// * `ip` - IPv4 Address
+    /// * `mask` - Subnet mask
+    pub fn new<I: Into<Ipv4Addr>>(ip: I, mask: u8) -> Self {
         let mut subnet: u32 = u32::MAX;
         for idx in 0..(32 - mask) {
             subnet = subnet ^ (1 << idx);
         }
 
         Self {
-            ip: IpAddr::V4(ip.into()),
-            mask: IpAddr::V4(subnet.into()),
+            ip: ip.into(),
+            mask: subnet.into(),
         }
     }
 
-    pub fn new_v6<I: Into<Ipv6Addr>>(ip: I, mask: u8) -> Self {
+    /// Returns the subnet mask of this network
+    pub fn subnet_mask(&self) -> Ipv4Addr {
+        self.mask
+    }
+
+    /// Returns the subnet mask of this network
+    pub fn subnet_mask_bits(&self) -> u8 {
+        u32::from(self.mask).count_ones() as u8
+    }
+
+    /// Returns the IPv4 address used to create this network
+    pub fn ip(&self) -> Ipv4Addr {
+        self.ip
+    }
+
+    /// Returns the network address of this network
+    pub fn network(&self) -> Ipv4Addr {
+        self.ip & self.mask
+    }
+
+    /// Returns the broadcast address of this network
+    pub fn broadcast(&self) -> Ipv4Addr {
+        self.ip | !self.mask
+    }
+
+    /// Returns true if the IP address is contained within the network
+    pub fn contains<I: Into<Ipv4Addr>>(&self, ip: I) -> bool {
+        (ip.into() & self.mask) == self.network()
+    }
+
+    /// Returns the next IP from in the subnet
+    pub fn next(&self) -> Option<Ipv4Network> {
+        let ip = u32::from(self.ip).wrapping_add(1);
+        let ip = Ipv4Addr::from(ip);
+
+        if ip == self.network() || ip == self.broadcast() {
+            None
+        } else {
+            Some(Self::new(ip, self.subnet_mask_bits()))
+        }
+    }
+}
+
+impl Ipv6Network {
+    /// Creats a new IPv6 network address (aka IP address with a subnet)
+    ///
+    /// ### Arguments
+    /// * `ip` - IPv6 Address
+    /// * `mask` - Subnet mask
+    pub fn new<I: Into<Ipv6Addr>>(ip: I, mask: u8) -> Self {
         let mut subnet: u128 = u128::MAX;
         for idx in 0..(128 - mask) {
             subnet = subnet ^ (1 << idx);
         }
 
         Self {
-            ip: IpAddr::V6(ip.into()),
-            mask: IpAddr::V6(subnet.into()),
+            ip: ip.into(),
+            mask: subnet.into(),
         }
     }
 
-    /// Returns the IP address used to create this network
-    pub fn ip(&self) -> IpAddr {
-        self.ip
-    }
-
-    /// Returns the subnet mask formatted as an IP address
-    /// (i.e., 255.255.255.0)
-    pub fn subnet_mask(&self) -> IpAddr {
+    /// Returns the subnet mask of this network
+    pub fn subnet_mask(&self) -> Ipv6Addr {
         self.mask
     }
 
-    /// Returns the subnet mask as a number (i.e., 24, 25, 26, etc.)
+    /// Returns the subnet mask of this network
     pub fn subnet_mask_bits(&self) -> u8 {
-        match self.mask {
-            IpAddr::V4(addr) => {
-                let ip = u32::from(addr);
-                ip.count_ones() as u8
-            }
-            IpAddr::V6(addr) => {
-                let ip = u128::from(addr);
-                ip.count_ones() as u8
-            }
-        }
-    }
-    /// Returns the network address (aka all zeros in the host component)
-    pub fn network(&self) -> IpAddr {
-        match (self.ip, self.mask) {
-            (IpAddr::V4(ip), IpAddr::V4(mask)) => IpAddr::V4(ip & mask),
-            (IpAddr::V6(ip), IpAddr::V6(mask)) => IpAddr::V6(ip & mask),
-            (_, _) => unreachable!("mismatch ip and subnet ip versions"),
-        }
+        u128::from(self.mask).count_ones() as u8
     }
 
-    /// Returns the broadcast address (aka all ones in the host component)
-    pub fn broadcast(&self) -> IpAddr {
-        match (self.ip, self.mask) {
-            (IpAddr::V4(ip), IpAddr::V4(mask)) => IpAddr::V4(ip | !mask),
-            (IpAddr::V6(ip), IpAddr::V6(mask)) => IpAddr::V6(ip | !mask),
-            (_, _) => unreachable!("mismatch ip and subnet ip versions"),
-        }
+    /// Returns the IPv6 address used to create this network
+    pub fn ip(&self) -> Ipv6Addr {
+        self.ip
     }
 
-    /// Returns true of the provided IP address is contained in this network
-    /// or if the address is the univeral broadcast address (i.e. 255.255.255.255)
-    ///
-    /// If an IPv6 address is passed to an IPv4 network, returns false.
-    /// If an IPv4 address is passed to an IPv6 network, returns false.
-    ///
-    /// ### Arguments
-    /// * `ip` - IP address to check if in cidr / network
-    pub fn contains<I: Into<IpAddr>>(&self, ip: I) -> bool {
-        match (ip.into(), self.mask) {
-            (IpAddr::V4(BROADCAST4), _) => true,
-            (IpAddr::V4(ip), IpAddr::V4(mask)) => (ip & mask) == self.network(),
-            (IpAddr::V6(ip), IpAddr::V6(mask)) => (ip & mask) == self.network(),
-            (_, _) => false,
-        }
+    /// Returns the network address of this network
+    pub fn network(&self) -> Ipv6Addr {
+        self.ip & self.mask
     }
 
-    /// Returns the next ip address in this subnet, or none if the next
-    /// address would enter a new subnet
-    pub fn next(&self) -> Option<NetworkAddress> {
-        let next = match self.ip {
-            IpAddr::V4(addr) => {
-                let ip = u32::from(addr).wrapping_add(1);
-                let ip = Ipv4Addr::from(ip);
-                IpAddr::V4(ip)
-            }
-            IpAddr::V6(addr) => {
-                let ip = u128::from(addr).wrapping_add(1);
-                let ip = Ipv6Addr::from(ip);
-                IpAddr::V6(ip)
-            }
-        };
+    /// Returns the broadcast address of this network
+    pub fn broadcast(&self) -> Ipv6Addr {
+        self.ip | !self.mask
+    }
 
-        if next == self.broadcast() || next == self.network() {
-            return None;
-        }
+    /// Returns true if the IP address is contained within the network
+    pub fn contains<I: Into<Ipv6Addr>>(&self, ip: I) -> bool {
+        (ip.into() & self.mask) == self.network()
+    }
 
-        match self.contains(next) {
-            true => Some(NetworkAddress::new(next, self.subnet_mask_bits())),
-            false => None,
+    /// Returns the next IP from in the subnet
+    pub fn next(&self) -> Option<Ipv6Network> {
+        let ip = u128::from(self.ip).wrapping_add(1);
+        let ip = Ipv6Addr::from(ip);
+
+        if ip == self.network() || ip == self.broadcast() {
+            None
+        } else {
+            Some(Self::new(ip, self.subnet_mask_bits()))
         }
     }
 }
 
-impl Display for NetworkAddress {
+impl Display for Ipv4Network {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mask = match self.mask {
-            IpAddr::V4(ip) => u32::from(ip).count_ones(),
-            IpAddr::V6(ip) => u128::from(ip).count_ones(),
-        };
+        let mask = u32::from(self.mask).count_ones();
         write!(f, "{}/{}", self.ip, mask)
     }
 }
 
-impl FromStr for NetworkAddress {
+impl FromStr for Ipv4Network {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -157,23 +163,23 @@ impl FromStr for NetworkAddress {
         let ip = parts.next().ok_or_else(|| "missing ip component")?;
         let mask = parts.next().unwrap_or_else(|| "32");
 
-        let ip: IpAddr = ip.parse().map_err(|_| "unable to parse ip address")?;
+        let ip: Ipv4Addr = ip.parse().map_err(|_| "unable to parse ip address")?;
         let mask: u8 = mask.parse().map_err(|_| "unable to parse subnet mask")?;
 
         Ok(Self::new(ip, mask))
     }
 }
 
-impl PartialEq<IpAddr> for NetworkAddress {
-    fn eq(&self, other: &IpAddr) -> bool {
+impl PartialEq<Ipv4Addr> for Ipv4Network {
+    fn eq(&self, other: &Ipv4Addr) -> bool {
         self.ip == *other
     }
 }
 
-struct NetworkAddressVisitor;
+struct Ipv4NetworkVisitor;
 
-impl<'de> Visitor<'de> for NetworkAddressVisitor {
-    type Value = NetworkAddress;
+impl<'de> Visitor<'de> for Ipv4NetworkVisitor {
+    type Value = Ipv4Network;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a network address, like 192.168.2.1/24")
@@ -183,21 +189,21 @@ impl<'de> Visitor<'de> for NetworkAddressVisitor {
     where
         E: serde::de::Error,
     {
-        v.parse::<NetworkAddress>()
+        v.parse::<Ipv4Network>()
             .map_err(|e| E::custom(e.to_string()))
     }
 }
 
-impl<'de> Deserialize<'de> for NetworkAddress {
+impl<'de> Deserialize<'de> for Ipv4Network {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_str(NetworkAddressVisitor)
+        deserializer.deserialize_str(Ipv4NetworkVisitor)
     }
 }
 
-impl Serialize for NetworkAddress {
+impl Serialize for Ipv4Network {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -210,23 +216,23 @@ impl Serialize for NetworkAddress {
 mod tests {
     use std::net::Ipv4Addr;
 
-    use super::NetworkAddress;
+    use super::Ipv4Network;
 
     #[test]
     fn create_cidr_ipv4() {
-        let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
+        let cidr = Ipv4Network::new([10, 10, 10, 1], 24);
         assert_eq!("10.10.10.1/24", &cidr.to_string());
     }
 
     #[test]
     fn get_subnet_mask_bits() {
-        let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
+        let cidr = Ipv4Network::new([10, 10, 10, 1], 24);
         assert_eq!(cidr.subnet_mask_bits(), 24);
     }
 
     #[test]
     fn get_next_address_good() {
-        let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
+        let cidr = Ipv4Network::new([10, 10, 10, 1], 24);
         let expected = Ipv4Addr::from([10, 10, 10, 2]);
 
         let next = cidr.next();
@@ -237,7 +243,7 @@ mod tests {
 
     #[test]
     fn get_next_address_bad_broadcast() {
-        let cidr = NetworkAddress::new_v4([10, 10, 10, 254], 24);
+        let cidr = Ipv4Network::new([10, 10, 10, 254], 24);
 
         let next = cidr.next();
         assert!(next.is_none());
@@ -245,28 +251,28 @@ mod tests {
 
     #[test]
     fn get_network_addresss_ipv4() {
-        let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
+        let cidr = Ipv4Network::new([10, 10, 10, 1], 24);
         let net = cidr.network();
         assert_eq!("10.10.10.0", &net.to_string());
     }
 
     #[test]
     fn get_broadcast_addresss_ipv4() {
-        let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
+        let cidr = Ipv4Network::new([10, 10, 10, 1], 24);
         let net = cidr.broadcast();
         assert_eq!("10.10.10.255", &net.to_string());
     }
 
     #[test]
     fn contains_ipv4_good() {
-        let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
+        let cidr = Ipv4Network::new([10, 10, 10, 1], 24);
         let val = cidr.contains(Ipv4Addr::from([10, 10, 10, 45]));
         assert_eq!(val, true, "10.10.10.0/24 cidr should contain 10.10.10.45");
     }
 
     #[test]
     fn contains_ipv4_bad() {
-        let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
+        let cidr = Ipv4Network::new([10, 10, 10, 1], 24);
         let val = cidr.contains(Ipv4Addr::from([10, 10, 11, 45]));
         assert_eq!(
             val, false,
@@ -276,7 +282,7 @@ mod tests {
 
     #[test]
     fn parse_ipv4_string() {
-        let cidr: NetworkAddress = "10.10.10.213/25".parse().unwrap();
+        let cidr: Ipv4Network = "10.10.10.213/25".parse().unwrap();
         let net = cidr.network();
         let broadcast = cidr.broadcast();
         assert_eq!("10.10.10.128", &net.to_string(), "network mismatch");

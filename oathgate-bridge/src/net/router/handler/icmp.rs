@@ -19,7 +19,7 @@ impl ProtocolHandler for IcmpHandler {
         NET_PROTOCOL_ICMP
     }
 
-    fn handle_protocol(&self, pkt: &Ipv4Packet, buf: &mut [u8]) -> Result<usize, ProtocolError> {
+    fn handle_protocol(&mut self, pkt: &Ipv4Packet, buf: &mut [u8]) -> Result<usize, ProtocolError> {
         let payload = pkt.payload();
 
         if payload.len() < ICMP_HDR_SZ {

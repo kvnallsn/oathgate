@@ -1,15 +1,13 @@
 //! Configuration file module
 
-use std::{
-    fs::File,
-    io,
-    net::{Ipv4Addr, SocketAddr},
-    path::Path,
-};
+pub(crate) mod dhcp;
 
+use std::{fs::File, io, net::SocketAddr, path::Path};
+
+use oathgate_net::types::Ipv4Network;
 use serde::{Deserialize, Serialize};
 
-use crate::net::wan::WgConfig;
+use crate::{config::dhcp::DhcpConfig, net::wan::WgConfig};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -38,8 +36,8 @@ pub struct UdpConfig {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RouterConfig {
-    pub ipv4: Ipv4Addr,
-    pub dhcp: bool,
+    pub ipv4: Ipv4Network,
+    pub dhcp: DhcpConfig,
     pub dns: bool,
 }
 

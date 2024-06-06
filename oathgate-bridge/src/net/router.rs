@@ -10,7 +10,7 @@ use std::{
 use flume::{Receiver, Sender};
 use oathgate_net::{
     protocols::ArpPacket,
-    types::{EtherType, MacAddress, NetworkAddress},
+    types::{EtherType, MacAddress, Ipv4Network},
     EthernetFrame, EthernetPacket, Ipv4Packet, ProtocolError, Switch, SwitchPort,
 };
 
@@ -24,7 +24,6 @@ use self::handler::ProtocolHandler;
 use super::NetworkError;
 
 const IPV4_HDR_SZ: usize = 20;
-const BROADCAST4: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);
 
 pub enum RouterMsg {
     FromLan(EthernetPacket),
@@ -48,7 +47,7 @@ pub struct Router {
     port: usize,
     wan: Option<Box<dyn WanHandle>>,
     mac: MacAddress,
-    network: NetworkAddress,
+    network: Ipv4Network,
     ip4_handlers: HashMap<u8, Box<dyn ProtocolHandler>>,
 }
 
@@ -83,10 +82,8 @@ impl RouterBuilder {
     /// Create the router, spawning a new thread to run the core logic
     ///
     /// ### Arguments
-    /// * `ip4` - IPv4 address to assign to this router
-    pub fn spawn<I: Into<Ipv4Addr>>(self, ip4: I, switch: VirtioSwitch) -> std::io::Result<()> {
-        let network = NetworkAddress::new(ip4.into(), 24);
-
+    /// * `network` - Network address and subnet mask
+    pub fn spawn(self, network: Ipv4Network, switch: VirtioSwitch) -> std::io::Result<()> {
         let (tx, rx) = flume::unbounded();
 
         let handle = RouterHandle { tx };
@@ -197,9 +194,11 @@ impl Router {
 
     /// Returns true if a packet is destined for this local device or if
     /// the it is a broadcast packet
-    fn is_local_or_broadcast<A: Into<IpAddr>>(&self, dst: A) -> bool {
-        let dst = dst.into();
-        self.network == dst || BROADCAST4 == dst
+    fn is_local<A: Into<IpAddr>>(&self, dst: A) -> bool {
+        match dst.into() {
+            IpAddr::V4(ip) => self.network == ip,
+            IpAddr::V6(_ip) => false,
+        }
     }
 
     fn handle_arp(&mut self, pkt: Vec<u8>) -> Result<RouterAction, ProtocolError> {
@@ -213,7 +212,7 @@ impl Router {
         );
         self.arp.insert(arp.spa, arp.sha);
 
-        if self.is_local_or_broadcast(arp.tpa) {
+        if self.is_local(arp.tpa) {
             // responsd with router's mac
             let mut rpkt = vec![0u8; arp.size()];
             arp.to_reply(self.mac);
@@ -239,7 +238,7 @@ impl Router {
     /// Routes an IPv4 packet to the appropriate destination
     fn route_ip4(&mut self, pkt: Ipv4Packet) -> Result<RouterAction, ProtocolError> {
         match self.network.contains(pkt.dest()) {
-            true => match self.is_local_or_broadcast(pkt.dest()) {
+            true => match self.is_local(pkt.dest()) || pkt.dest().is_broadcast() {
                 true => Ok(self.handle_local_ipv4(pkt)),
                 false => {
                     let dst = pkt.dest();
@@ -259,11 +258,11 @@ impl Router {
         Ok(RouterAction::Drop(pkt))
     }
 
-    fn handle_local_ipv4(&self, pkt: Ipv4Packet) -> RouterAction {
+    fn handle_local_ipv4(&mut self, pkt: Ipv4Packet) -> RouterAction {
         let mut rpkt = vec![0u8; 1560];
 
-        match self.ip4_handlers.get(&pkt.protocol()) {
-            Some(ref handler) => {
+        match self.ip4_handlers.get_mut(&pkt.protocol()) {
+            Some(ref mut handler) => {
                 match handler.handle_protocol(&pkt, &mut rpkt[IPV4_HDR_SZ..]) {
                     Ok(0) => RouterAction::Drop(Vec::new()),
                     Ok(sz) => {

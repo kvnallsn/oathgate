@@ -7,7 +7,7 @@ use std::fmt::Debug;
 
 use crate::{cast, ProtocolError};
 
-pub use self::{mac::MacAddress, netaddress::NetworkAddress};
+pub use self::{mac::MacAddress, netaddress::{IpNetwork, Ipv4Network, Ipv6Network}};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EtherType {
