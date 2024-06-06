@@ -1,15 +1,10 @@
 //! ICMP Protocol Handler
 
-use std::{collections::HashMap, net::IpAddr};
+use std::collections::HashMap;
 
-use dhcproto::{v4::{DhcpOption, Message, MessageType}, Decodable, Decoder, Encodable, Encoder};
 use oathgate_net::{
-    protocols::{NET_PROTOCOL_UDP, UDP_HDR_SZ}, types::{MacAddress, Ipv4Network}, Ipv4Packet, ProtocolError
+    protocols::{NET_PROTOCOL_UDP, UDP_HDR_SZ},  Ipv4Packet, ProtocolError
 };
-
-const UDP_PORT_DHCP_SRV: u16 = 67;
-
-use crate::config::dhcp::DhcpConfig;
 
 use super::{PortHandler, ProtocolHandler};
 
@@ -56,138 +51,5 @@ impl ProtocolHandler for UdpHandler {
         } else {
             Ok(0)
         }
-    }
-}
-
-pub struct DhcpServer {
-    network: Ipv4Network,
-    start: IpAddr,
-    end: IpAddr,
-    lease_time: u32,
-
-    next_avail: Option<Ipv4Network>,
-    leased: HashMap<IpAddr, MacAddress>,
-}
-
-impl DhcpServer {
-    pub fn new(network: Ipv4Network, cfg: DhcpConfig) -> Self {
-        if !network.contains(cfg.start) || !network.contains(cfg.end) {
-            // TODO: return error
-        }
-
-        let next_avail = Ipv4Network::new(cfg.start, network.subnet_mask_bits());
-
-        Self {
-            network,
-            start: cfg.start.into(),
-            end: cfg.end.into(),
-            lease_time: 86400, // 1 day
-            next_avail: Some(next_avail),
-            leased: HashMap::new(),
-        }
-    }
-
-    pub fn lease_ip(&mut self) -> Option<Ipv4Network> {
-        if let Some(ip) = self.next_avail.take() {
-            self.next_avail = ip.next();
-            Some(ip)
-        } else {
-            None
-        }
-    }
-
-    pub fn handle_discover(&mut self, msg: Message) -> Result<Message, ProtocolError> {
-        let ip = match self.lease_ip() {
-            Some(ip) => ip,
-            None => {
-                tracing::warn!("dhcp ip address space exhausted");
-                return Err(ProtocolError::Other("address space exhausted".into()));
-            }
-        };
-
-        let msg = self.build_message(&msg, ip, MessageType::Offer);
-        Ok(msg)
-    }
-
-    pub fn handle_request(&mut self, msg: Message) -> Result<Message, ProtocolError> {
-        let ip = match self.lease_ip() {
-            Some(ip) => ip,
-            None => {
-                tracing::warn!("dhcp ip address space exhausted");
-                return Err(ProtocolError::Other("address space exhausted".into()));
-            }
-        };
-
-        let msg = self.build_message(&msg, ip, MessageType::Ack);
-        Ok(msg)
-    }
-
-    fn build_message(&self, msg: &Message, ip: Ipv4Network, ty: MessageType) -> Message {
-        let mut rmsg = Message::default();
-        rmsg.set_flags(msg.flags());
-        rmsg.set_opcode(dhcproto::v4::Opcode::BootReply);
-        rmsg.set_htype(msg.htype());
-        rmsg.set_xid(msg.xid());
-        rmsg.set_yiaddr(ip.ip());
-        if MessageType::Ack == ty {
-            rmsg.set_ciaddr(msg.ciaddr());
-        }
-        rmsg.set_siaddr(self.network.ip());
-        rmsg.set_giaddr(msg.giaddr());
-        rmsg.set_chaddr(msg.chaddr());
-        rmsg.opts_mut()
-            .insert(DhcpOption::MessageType(ty));
-        rmsg.opts_mut()
-            .insert(DhcpOption::AddressLeaseTime(86400 /* 1 day */));
-        rmsg.opts_mut()
-            .insert(DhcpOption::ServerIdentifier(self.network.ip()));
-        rmsg.opts_mut()
-            .insert(DhcpOption::SubnetMask(self.network.subnet_mask()));
-        rmsg.opts_mut()
-            .insert(DhcpOption::BroadcastAddr(self.network.broadcast()));
-        rmsg.opts_mut()
-            .insert(DhcpOption::Router(vec![self.network.ip()]));
-        rmsg.opts_mut()
-            .insert(DhcpOption::DomainNameServer(vec![[1, 1, 1, 1].into()]));
-
-        rmsg
-    }
-}
-
-impl PortHandler for DhcpServer {
-    fn port(&self) -> u16 {
-        UDP_PORT_DHCP_SRV
-    }
-
-    fn handle_port(&mut self, data: &[u8], buf: &mut [u8]) -> Result<usize, ProtocolError> {
-        tracing::debug!("handling dhcp packet");
-        let msg = Message::decode(&mut Decoder::new(data))
-            .map_err(|e| ProtocolError::Other(e.to_string()))?;
-
-        let mut vbuf = Vec::with_capacity(256);
-        let mut encoder = Encoder::new(&mut vbuf);
-      
-        tracing::debug!(?msg, "dhcp message");
-
-        let ops = msg.opts();
-        match ops.msg_type().ok_or_else(|| ProtocolError::Other("dhcp missing msg type".into()))? {
-            MessageType::Discover => {
-                let rmsg = self.handle_discover(msg)?;
-                rmsg.encode(&mut encoder).map_err(|e| ProtocolError::Other(e.to_string()))?;
-            },
-            MessageType::Request => {
-                let rmsg = self.handle_request(msg)?;
-                rmsg.encode(&mut encoder).map_err(|e| ProtocolError::Other(e.to_string()))?;
-            }
-            MessageType::Offer => tracing::debug!("DHCP-OFFER: should not occur, sent by server"),
-            MessageType::Ack=> tracing::debug!("DHCP-ACKNOWLEDGE: should not occur, sent by server"),
-            MessageType::Release => (),
-            MessageType::Decline => (),
-            _ => (),
-        }
-
-        let len = vbuf.len();
-        buf[0..len].copy_from_slice(&vbuf);
-        Ok(len)
     }
 }

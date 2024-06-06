@@ -4,7 +4,7 @@ pub mod handler;
 
 use std::{
     collections::HashMap,
-    net::{IpAddr, Ipv4Addr},
+    net::IpAddr,
 };
 
 use flume::{Receiver, Sender};
@@ -201,6 +201,14 @@ impl Router {
         }
     }
 
+    // Returns true if the IP is the global broadcast IP
+    fn is_global_broadcast(&self, ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(ip) => ip.is_broadcast(),
+            IpAddr::V6(_ip) => false,
+        }
+    }
+
     fn handle_arp(&mut self, pkt: Vec<u8>) -> Result<RouterAction, ProtocolError> {
         tracing::trace!("handling arp packet");
         let mut arp = ArpPacket::parse(&pkt)?;
@@ -212,7 +220,7 @@ impl Router {
         );
         self.arp.insert(arp.spa, arp.sha);
 
-        if self.is_local(arp.tpa) {
+        if self.is_local(arp.tpa) || self.is_global_broadcast(arp.tpa) {
             // responsd with router's mac
             let mut rpkt = vec![0u8; arp.size()];
             arp.to_reply(self.mac);
@@ -237,7 +245,7 @@ impl Router {
 
     /// Routes an IPv4 packet to the appropriate destination
     fn route_ip4(&mut self, pkt: Ipv4Packet) -> Result<RouterAction, ProtocolError> {
-        match self.network.contains(pkt.dest()) {
+        match self.network.contains(pkt.dest()) || pkt.dest().is_broadcast() {
             true => match self.is_local(pkt.dest()) || pkt.dest().is_broadcast() {
                 true => Ok(self.handle_local_ipv4(pkt)),
                 false => {

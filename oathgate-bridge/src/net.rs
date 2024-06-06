@@ -7,4 +7,6 @@ pub mod router;
 pub mod switch;
 pub mod wan;
 
+pub mod dhcp;
+
 pub use self::error::NetworkError;

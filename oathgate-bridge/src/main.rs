@@ -17,12 +17,10 @@ use crate::{
     config::WanConfig,
     error::Error,
     net::{
-        router::{
+        dhcp::DhcpServer, router::{
             handler::{IcmpHandler, UdpHandler},
             Router,
-        },
-        switch::VirtioSwitch,
-        wan::{TunTap, UdpDevice, Wan, WgDevice},
+        }, switch::VirtioSwitch, wan::{TunTap, UdpDevice, Wan, WgDevice}
     }
 };
 
@@ -74,11 +72,14 @@ fn run(opts: Opts, cfg: Config) -> Result<(), Error> {
     // spawn the default route / upstream
     let wan = parse_wan(cfg.wan)?;
 
+    let mut udp_handler = UdpHandler::default();
+    udp_handler.register_port_handler(DhcpServer::new(cfg.router.ipv4, cfg.router.dhcp));
+
     // spawn thread to receive messages/packets
     let _router = Router::builder()
         .wan(wan)
         .register_proto_handler(IcmpHandler::default())
-        .register_proto_handler(UdpHandler::default())
+        .register_proto_handler(udp_handler)
         .spawn(cfg.router.ipv4, switch.clone())?;
 
     let mut poller = Poll::new()?;
