@@ -1,0 +1,12 @@
+[package]
+name = "oathgate-fabrial"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { workspace = true }
+mio = { workspace = true }
+nix = { workspace = true }
+oathgate-net = { path = "../oathgate-net" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

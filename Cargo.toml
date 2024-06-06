@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "oathgate-bridge",
+    "oathgate-fabrial",
     "oathgate-net",
     "oathgate-tui",
     "oathgate-vhost",
