@@ -64,6 +64,19 @@ impl NetworkAddress {
         self.mask
     }
 
+    /// Returns the subnet mask as a number (i.e., 24, 25, 26, etc.)
+    pub fn subnet_mask_bits(&self) -> u8 {
+        match self.mask {
+            IpAddr::V4(addr) => {
+                let ip = u32::from(addr);
+                ip.count_ones() as u8
+            }
+            IpAddr::V6(addr) => {
+                let ip = u128::from(addr);
+                ip.count_ones() as u8
+            }
+        }
+    }
     /// Returns the network address (aka all zeros in the host component)
     pub fn network(&self) -> IpAddr {
         match (self.ip, self.mask) {
@@ -96,6 +109,32 @@ impl NetworkAddress {
             (IpAddr::V4(ip), IpAddr::V4(mask)) => (ip & mask) == self.network(),
             (IpAddr::V6(ip), IpAddr::V6(mask)) => (ip & mask) == self.network(),
             (_, _) => false,
+        }
+    }
+
+    /// Returns the next ip address in this subnet, or none if the next
+    /// address would enter a new subnet
+    pub fn next(&self) -> Option<NetworkAddress> {
+        let next = match self.ip {
+            IpAddr::V4(addr) => {
+                let ip = u32::from(addr).wrapping_add(1);
+                let ip = Ipv4Addr::from(ip);
+                IpAddr::V4(ip)
+            }
+            IpAddr::V6(addr) => {
+                let ip = u128::from(addr).wrapping_add(1);
+                let ip = Ipv6Addr::from(ip);
+                IpAddr::V6(ip)
+            }
+        };
+
+        if next == self.broadcast() || next == self.network() {
+            return None;
+        }
+
+        match self.contains(next) {
+            true => Some(NetworkAddress::new(next, self.subnet_mask_bits())),
+            false => None,
         }
     }
 }
@@ -177,6 +216,31 @@ mod tests {
     fn create_cidr_ipv4() {
         let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
         assert_eq!("10.10.10.1/24", &cidr.to_string());
+    }
+
+    #[test]
+    fn get_subnet_mask_bits() {
+        let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
+        assert_eq!(cidr.subnet_mask_bits(), 24);
+    }
+
+    #[test]
+    fn get_next_address_good() {
+        let cidr = NetworkAddress::new_v4([10, 10, 10, 1], 24);
+        let expected = Ipv4Addr::from([10, 10, 10, 2]);
+
+        let next = cidr.next();
+        assert!(next.is_some());
+        let next = next.unwrap();
+        assert_eq!(next.ip(), expected);
+    }
+
+    #[test]
+    fn get_next_address_bad_broadcast() {
+        let cidr = NetworkAddress::new_v4([10, 10, 10, 254], 24);
+
+        let next = cidr.next();
+        assert!(next.is_none());
     }
 
     #[test]
