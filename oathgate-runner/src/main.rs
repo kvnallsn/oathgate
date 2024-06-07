@@ -87,7 +87,7 @@ fn run_vm(
     mask.add(nix::sys::signal::SIGTERM);
     mask.thread_block()?;
 
-    let mut sfd = SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK)?;
+    let sfd = SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK)?;
 
     poller
         .registry()

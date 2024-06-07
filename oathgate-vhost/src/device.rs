@@ -335,7 +335,7 @@ impl<S: Switch + 'static> VirtioDevice<S> {
 
             match rmsg.iovs().count() {
                 1 => {
-                    let ancillary = rmsg.cmsgs().collect::<VecDeque<_>>();
+                    let ancillary = rmsg.cmsgs()?.collect::<VecDeque<_>>();
                     VHostHeader::parse(&hdr, ancillary)
                 }
                 _ => {
