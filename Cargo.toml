@@ -3,7 +3,7 @@ members = [
     "oathgate-bridge",
     "oathgate-fabrial",
     "oathgate-net",
-    "oathgate-tui",
+    "oathgate-runner",
     "oathgate-vhost",
     "upstreams/udp-dummy"
 ]

@@ -866,7 +866,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "oathgate-tui"
+name = "oathgate-runner"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -884,10 +884,6 @@ dependencies = [
  "tracing-subscriber",
  "tui-term",
 ]
-
-[[package]]
-name = "oathgate-types"
-version = "0.1.0"
 
 [[package]]
 name = "oathgate-vhost"
