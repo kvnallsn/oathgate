@@ -17,11 +17,14 @@ use crate::{
     config::WanConfig,
     error::Error,
     net::{
-        dhcp::DhcpServer, router::{
+        dhcp::DhcpServer,
+        router::{
             handler::{IcmpHandler, UdpHandler},
             Router,
-        }, switch::VirtioSwitch, wan::{TunTap, UdpDevice, Wan, WgDevice}
-    }
+        },
+        switch::VirtioSwitch,
+        wan::{TunTap, UdpDevice, Wan, WgDevice},
+    },
 };
 
 #[derive(Parser)]

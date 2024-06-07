@@ -1,7 +1,10 @@
 //! VirtQueue implementation
 
 use std::{
-    fs::File, io::{Read, Write}, ops::Deref, os::fd::{FromRawFd, RawFd}, 
+    fs::File,
+    io::{Read, Write},
+    ops::Deref,
+    os::fd::{FromRawFd, RawFd},
 };
 
 use nix::unistd;

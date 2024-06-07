@@ -2,15 +2,12 @@
 
 pub mod handler;
 
-use std::{
-    collections::HashMap,
-    net::IpAddr,
-};
+use std::{collections::HashMap, net::IpAddr};
 
 use flume::{Receiver, Sender};
 use oathgate_net::{
     protocols::ArpPacket,
-    types::{EtherType, MacAddress, Ipv4Network},
+    types::{EtherType, Ipv4Network, MacAddress},
     EthernetFrame, EthernetPacket, Ipv4Packet, ProtocolError, Switch, SwitchPort,
 };
 

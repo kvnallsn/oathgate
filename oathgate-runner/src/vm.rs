@@ -61,10 +61,7 @@ impl VmHandle {
             "-numa",
             "node,memdev=mem",
             "-drive",
-            format!(
-                "id=root,file={},if=virtio",
-                machine.disk.display()
-            ),
+            format!("id=root,file={},if=virtio", machine.disk.display()),
             "-chardev",
             format!("socket,id=chr0,path={}", socket.display()),
             "-netdev",

@@ -6,7 +6,11 @@ mod wireguard;
 
 use oathgate_net::Ipv4Packet;
 
-pub use self::{tap::TunTap, udp::UdpDevice, wireguard::{WgConfig, WgDevice}};
+pub use self::{
+    tap::TunTap,
+    udp::UdpDevice,
+    wireguard::{WgConfig, WgDevice},
+};
 
 use super::{router::RouterHandle, NetworkError};
 

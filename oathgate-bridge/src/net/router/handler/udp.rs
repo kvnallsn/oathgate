@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use oathgate_net::{
-    protocols::{NET_PROTOCOL_UDP, UDP_HDR_SZ},  Ipv4Packet, ProtocolError
+    protocols::{NET_PROTOCOL_UDP, UDP_HDR_SZ},
+    Ipv4Packet, ProtocolError,
 };
 
 use super::{PortHandler, ProtocolHandler};
@@ -12,7 +13,6 @@ use super::{PortHandler, ProtocolHandler};
 pub struct UdpHandler {
     handlers: HashMap<u16, Box<dyn PortHandler>>,
 }
-
 
 impl UdpHandler {
     /// Registers a port handler for this udp handler
@@ -29,7 +29,11 @@ impl ProtocolHandler for UdpHandler {
         NET_PROTOCOL_UDP
     }
 
-    fn handle_protocol(&mut self, pkt: &Ipv4Packet, buf: &mut [u8]) -> Result<usize, ProtocolError> {
+    fn handle_protocol(
+        &mut self,
+        pkt: &Ipv4Packet,
+        buf: &mut [u8],
+    ) -> Result<usize, ProtocolError> {
         let payload = pkt.payload();
 
         if payload.len() < UDP_HDR_SZ {

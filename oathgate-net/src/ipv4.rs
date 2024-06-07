@@ -5,7 +5,9 @@ use std::net::Ipv4Addr;
 use rand::Rng;
 
 use crate::{
-    cast, ph_checksum, protocols::{NET_PROTOCOL_TCP, NET_PROTOCOL_UDP}, ProtocolError
+    cast, ph_checksum,
+    protocols::{NET_PROTOCOL_TCP, NET_PROTOCOL_UDP},
+    ProtocolError,
 };
 
 /// Represents the Ipv4 header
@@ -295,7 +297,10 @@ mod tests {
     use super::Ipv4Packet;
 
     fn init_tracing() {
-        tracing_subscriber::FmtSubscriber::builder().with_max_level(tracing::Level::DEBUG).pretty().init();
+        tracing_subscriber::FmtSubscriber::builder()
+            .with_max_level(tracing::Level::DEBUG)
+            .pretty()
+            .init();
     }
 
     fn read_file(path: &str) -> Ipv4Packet {

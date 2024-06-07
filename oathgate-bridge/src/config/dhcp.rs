@@ -22,7 +22,9 @@ impl FromStr for DhcpConfig {
         let start = parts.next().ok_or_else(|| "start address not specified")?;
         let end = parts.next().ok_or_else(|| "end address not specified")?;
 
-        let start = start.parse::<Ipv4Addr>().map_err(|_| "invalid start address")?;
+        let start = start
+            .parse::<Ipv4Addr>()
+            .map_err(|_| "invalid start address")?;
         let end = end.parse::<Ipv4Addr>().map_err(|_| "invalid end address")?;
 
         if end < start {

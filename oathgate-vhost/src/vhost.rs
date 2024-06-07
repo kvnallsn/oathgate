@@ -5,7 +5,10 @@ use std::{io, path::PathBuf};
 use mio::{event::Source, net::UnixListener, Events, Interest, Poll, Token};
 use oathgate_net::Switch;
 
-use crate::{device::{DeviceOpts, VirtioDevice}, error::AppResult};
+use crate::{
+    device::{DeviceOpts, VirtioDevice},
+    error::AppResult,
+};
 
 /// An `FdMap` is a map of unique tokens to file descriptors
 pub struct VHostSocket {
@@ -25,7 +28,11 @@ impl VHostSocket {
         Ok(Self { socket })
     }
 
-    pub fn accept_and_spawn<S: Switch + 'static>(&mut self, device_opts: DeviceOpts, switch: S) -> AppResult<()> {
+    pub fn accept_and_spawn<S: Switch + 'static>(
+        &mut self,
+        device_opts: DeviceOpts,
+        switch: S,
+    ) -> AppResult<()> {
         let (strm, _peer) = self.socket.accept()?;
         tracing::info!("[vhost] accepted unix socket connection, spawning device");
 
@@ -34,13 +41,16 @@ impl VHostSocket {
         Ok(())
     }
 
-    pub fn run<S: Switch + 'static>(&mut self, device_opts: DeviceOpts, switch: S) -> io::Result<()> {
+    pub fn run<S: Switch + 'static>(
+        &mut self,
+        device_opts: DeviceOpts,
+        switch: S,
+    ) -> io::Result<()> {
         let listener_token = Token(0);
 
         let mut poll = Poll::new()?;
 
-        poll
-            .registry()
+        poll.registry()
             .register(self, listener_token, Interest::READABLE)?;
 
         let mut events = Events::with_capacity(10);
@@ -54,7 +64,9 @@ impl VHostSocket {
                 let token = event.token();
                 match token {
                     token if token == listener_token => {
-                        if let Err(error) = self.accept_and_spawn(device_opts.clone(), switch.clone()) {
+                        if let Err(error) =
+                            self.accept_and_spawn(device_opts.clone(), switch.clone())
+                        {
                             tracing::error!(?error, "unable to spawn virtio device");
                         }
                     }

@@ -1,6 +1,9 @@
-//! Event Handler 
+//! Event Handler
 
-use std::{io::{self, Write}, time::Duration};
+use std::{
+    io::{self, Write},
+    time::Duration,
+};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -67,13 +70,17 @@ impl EventHandler {
         Ok(false)
     }
 
-    fn handle_ctrl_key_press<W: Write>(&mut self, key: KeyEvent, stdin: &mut W) -> io::Result<bool> {
+    fn handle_ctrl_key_press<W: Write>(
+        &mut self,
+        key: KeyEvent,
+        stdin: &mut W,
+    ) -> io::Result<bool> {
         match key.code {
             KeyCode::Char('d') => stdin.write_all(&[0x04])?,
             KeyCode::Char('r') => stdin.write_all(&[0x12])?,
             KeyCode::Char('u') => stdin.write_all(&[0x15])?,
             KeyCode::Char('z') => stdin.write_all(&[0x1A])?,
-            _ => ()
+            _ => (),
         }
         Ok(false)
     }

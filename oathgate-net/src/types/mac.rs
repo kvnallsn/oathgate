@@ -1,7 +1,9 @@
 //! MAC Address
 
 use std::{
-    fmt::{Debug, Display}, os::fd::AsRawFd, str::FromStr
+    fmt::{Debug, Display},
+    os::fd::AsRawFd,
+    str::FromStr,
 };
 
 use nix::{
@@ -137,7 +139,10 @@ impl FromStr for MacAddress {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<_> = s.split(&[':', '-']).filter_map(|s| u8::from_str_radix(s, 16).ok()).collect();
+        let parts: Vec<_> = s
+            .split(&[':', '-'])
+            .filter_map(|s| u8::from_str_radix(s, 16).ok())
+            .collect();
         if parts.len() != 6 {
             return Err("invalid MAC format, expected: 01:02:03:04:05:05");
         } else {
@@ -159,23 +164,27 @@ impl<'de> Visitor<'de> for MacAddressVisitor {
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
-        E: serde::de::Error, {
-        v.parse::<MacAddress>().map_err(|e| E::custom(e.to_string()))
+        E: serde::de::Error,
+    {
+        v.parse::<MacAddress>()
+            .map_err(|e| E::custom(e.to_string()))
     }
 }
 
 impl<'de> Deserialize<'de> for MacAddress {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de> {
+        D: serde::Deserializer<'de>,
+    {
         deserializer.deserialize_str(MacAddressVisitor)
-    } 
+    }
 }
 
 impl Serialize for MacAddress {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         serializer.serialize_str(&self.to_string())
     }
 }

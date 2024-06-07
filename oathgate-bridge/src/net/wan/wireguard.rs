@@ -20,13 +20,10 @@ use nix::sys::{
     time::TimeSpec,
     timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags},
 };
-use oathgate_net::{
-    nat::NatTable,
-    Ipv4Header, Ipv4Packet,
-};
+use oathgate_net::{nat::NatTable, Ipv4Header, Ipv4Packet};
 use serde::{Deserialize, Serialize};
 
-use crate::net::{NetworkError, router::RouterHandle};
+use crate::net::{router::RouterHandle, NetworkError};
 
 use super::{Wan, WanHandle};
 
