@@ -1,0 +1,8 @@
+[Unit]
+Description=Oathgate's fabrial (TTY) daemon
+
+[Service]
+ExecStart=/usr/bin/oathgate-fabrial -vvi enp0s1
+
+[Install]
+WantedBy=multi-user.target

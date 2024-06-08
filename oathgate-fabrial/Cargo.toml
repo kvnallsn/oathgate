@@ -1,7 +1,15 @@
 [package]
 name = "oathgate-fabrial"
+description = "Provides a TTY and other interactive services inside a VM"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+authors = ["Kevin Allison"]
+
+[package.metadata.deb]
+revision = "2"
+maintainer-scripts = "debian/"
+systemd-units = { enable = true }
 
 [dependencies]
 clap = { workspace = true }
