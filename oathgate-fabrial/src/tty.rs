@@ -105,7 +105,7 @@ impl SockTTY {
                             SocketAction::WouldBlock => break 'sock,
                             SocketAction::Continue => (),
                             SocketAction::WriteToTTY => {
-                                tracing::debug!("read socket msg: {:02x?}", msg);
+                                tracing::trace!("read socket msg: {:02x?}", msg);
                                 self.write_to_tty(&msg)?;
                             }
                         }
