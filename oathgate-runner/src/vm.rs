@@ -1,12 +1,11 @@
 //! VM-related functions
 
 use std::{
-    io::{self, Write},
-    path::Path,
-    process::{Child, ExitStatus, Stdio},
+    fmt::Debug, io, os::fd::{AsRawFd, OwnedFd}, path::Path, process::{Child, ExitStatus, Stdio}
 };
 
 use mio::unix::pipe::Receiver;
+use nix::sys::socket::MsgFlags;
 use oathgate_net::types::MacAddress;
 
 use crate::MachineConfig;
@@ -19,8 +18,17 @@ macro_rules! cmd {
     }}
 }
 
+/// A `VmHandle` represents a handle to a running virtual machine
 pub struct VmHandle {
+    /// Unique identifer for this vm.  Currently derived from the last two
+    /// bytes of the the MAC address
+    id: usize,
+
+    /// Reference to the process running the virtual machine
     child: Child,
+
+    /// Reference to the pty, once this vm is started / running
+    pty: Option<OwnedFd>,
 }
 
 impl VmHandle {
@@ -78,7 +86,8 @@ impl VmHandle {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        Ok(VmHandle { child })
+        let id = cid as usize;
+        Ok(VmHandle { id, child, pty: None })
     }
 
     pub fn stdout_receiver(&mut self) -> io::Result<Receiver> {
@@ -105,11 +114,62 @@ impl VmHandle {
         self.child.wait()
     }
 
-    pub fn write_pty(&mut self, buf: &[u8]) -> io::Result<()> {
-        if let Some(ref mut stdin) = self.child.stdin {
-            stdin.write_all(buf)?;
+    /// Sets the PTY associated with this virtual machine
+    ///
+    /// ### Arguments
+    /// * `fd` - Opened file descriptor to the virtual machine's pty
+    pub fn set_pty(&mut self, fd: OwnedFd) {
+        self.pty = Some(fd);
+    }
+
+    /// Resizes the PTY running the virtual machine to the specified size
+    ///
+    /// ### Arguments
+    /// * `rows` - Number of rows for the terminal emulator
+    /// * `cols` - Number of cols for the terminal emulator
+    pub fn resize_pty(&self, rows: u16, cols: u16) -> io::Result<()> {
+        if let Some(pty) = self.pty.as_ref() {
+            tracing::debug!(vmid = self.id, "resizing vm pty to {rows}x{cols}");
+
+            let mut buf = [0x02, 0x00, 0x00, 0x00, 0x00];
+            buf[1..3].copy_from_slice(&rows.to_le_bytes());
+            buf[3..5].copy_from_slice(&cols.to_le_bytes());
+            nix::sys::socket::send(pty.as_raw_fd(), &buf, MsgFlags::empty())?;
+        } else {
+            tracing::warn!(vmid = self.id, "attempting to resize non-connected pty");
         }
 
         Ok(())
+    }
+
+    /// Writes a message to the PTY
+    ///
+    /// ### Arugments
+    /// * `buf` - Message to write to the PTY
+    pub fn write_pty(&mut self, buf: &[u8]) -> io::Result<()> {
+        if let Some(pty) = self.pty.as_ref() {
+            nix::sys::socket::send(pty.as_raw_fd(), buf, MsgFlags::MSG_DONTWAIT)?;
+        }
+
+        Ok(())
+    }
+
+    /// Reads data from the virtual machine's pty
+    ///
+    /// ### Arguments
+    /// * `buf` - buffer to read data into
+    pub fn read_pty(&self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(pty) = self.pty.as_ref() {
+            let sz = nix::sys::socket::recv(pty.as_raw_fd(), buf, MsgFlags::MSG_DONTWAIT)?;
+            Ok(sz)
+        } else {
+            Ok(0)
+        }
+    }
+}
+
+impl Debug for VmHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "VmHandle({:04x})", self.id)
     }
 }

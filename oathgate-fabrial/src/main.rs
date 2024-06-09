@@ -1,11 +1,15 @@
 mod tty;
 
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::{
+    io,
+    os::fd::{AsRawFd, OwnedFd},
+};
 
 use clap::Parser;
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::sys::socket::{
-    accept, bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType, SockaddrIn, VsockAddr,
+    accept, bind, connect, listen, socket, AddressFamily, Backlog, MsgFlags, SockFlag, SockType,
+    SockaddrIn, VsockAddr,
 };
 use oathgate_net::types::MacAddress;
 
@@ -71,6 +75,11 @@ fn run(opts: Opts) -> Result<(), Error> {
             )?;
 
             bind(sock.as_raw_fd(), &addr)?;
+
+            if let Err(error) = notify_started(cid, 3715) {
+                tracing::warn!(?error, "unable to notify hypervisor of vm start");
+            }
+
             tracing::info!("bound vsock cid={}, port={}", cid, opts.port);
 
             sock
@@ -78,7 +87,24 @@ fn run(opts: Opts) -> Result<(), Error> {
     };
 
     listen(&sock, Backlog::new(MAX_BACKLOG)?)?;
+
     poll(sock, &opts.command)?;
+
+    Ok(())
+}
+
+fn notify_started(cid: u32, port: u32) -> io::Result<()> {
+    let addr = VsockAddr::new(2, port);
+    let sock = socket(
+        AddressFamily::Vsock,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+
+    connect(sock.as_raw_fd(), &addr)?;
+
+    nix::sys::socket::send(sock.as_raw_fd(), &cid.to_le_bytes(), MsgFlags::empty())?;
 
     Ok(())
 }
