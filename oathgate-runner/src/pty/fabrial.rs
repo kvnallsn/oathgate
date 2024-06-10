@@ -1,9 +1,16 @@
 //! Fabrial PTY
 
-use std::{io, os::fd::{AsRawFd, OwnedFd}, sync::Arc};
+use std::{
+    io,
+    os::fd::{AsRawFd, OwnedFd},
+    sync::Arc,
+};
 
 use mio::{event::Source, unix::SourceFd};
-use nix::{errno::Errno, sys::socket::{AddressFamily, MsgFlags, SockFlag, VsockAddr}};
+use nix::{
+    errno::Errno,
+    sys::socket::{AddressFamily, MsgFlags, SockFlag, VsockAddr},
+};
 use parking_lot::RwLock;
 use tui_term::vt100;
 

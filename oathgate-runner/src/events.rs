@@ -70,7 +70,7 @@ impl EventHandler {
     fn handle_ctrl_key_press(
         &mut self,
         key: KeyEvent,
-        terminals: &ArcTerminalMap
+        terminals: &ArcTerminalMap,
     ) -> io::Result<bool> {
         let term = terminals.read();
 
