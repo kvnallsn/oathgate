@@ -89,6 +89,7 @@ impl OathgatePty for FabrialPty {
 
     fn resize_pty(&self, rows: u16, cols: u16) -> io::Result<()> {
         // write a resize message (code: 0x02)
+        self.parser.write().set_size(rows, cols);
         let rows = rows.to_le_bytes();
         let cols = cols.to_le_bytes();
         let msg = [0x02, rows[0], rows[1], cols[0], cols[1]];

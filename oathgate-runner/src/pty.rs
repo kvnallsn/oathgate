@@ -18,8 +18,8 @@ pub trait OathgatePty: Source + Send + Sync {
 
     fn write_pty(&self, data: &[u8]) -> std::io::Result<()>;
 
-    fn resize_pty(&self, _rows: u16, _cols: u16) -> std::io::Result<()> {
-        // Default implemention doesn't support resizing
+    fn resize_pty(&self, rows: u16, cols: u16) -> std::io::Result<()> {
+        self.pty().write().set_size(rows, cols);
         Ok(())
     }
 }

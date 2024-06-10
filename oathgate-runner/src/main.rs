@@ -27,14 +27,14 @@ use nix::{
 use parking_lot::RwLock;
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Modifier, Style},
     widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
 use serde::{Deserialize, Serialize};
 use tracing::Level;
-use tui_term::{vt100, widget::PseudoTerminal};
+use tui_term::widget::PseudoTerminal;
 use vm::VmHandle;
 
 use crate::pty::{FabrialPty, OathgatePty, PipePty};
@@ -69,29 +69,58 @@ pub struct Config {
     machine: MachineConfig,
 }
 
-#[derive(Default)]
 pub struct TerminalMap {
     terminals: HashMap<usize, Box<dyn OathgatePty>>,
+    winsz: (u16, u16),
     active: Option<usize>,
 }
 
 impl TerminalMap {
+    /// Adds a new pty to the terminal map
+    ///
+    /// ### Arguments
+    /// * `token` - Unique id used to identify this pty
+    /// * `pty` - Psuedo-terminal linked to virtual machine
     pub fn insert(&mut self, token: usize, pty: Box<dyn OathgatePty>) {
+        let (rows, cols) = self.get_size();
+        if let Err(error) = pty.resize_pty(rows, cols) {
+            tracing::warn!(?error, "unable to resize pty");
+        }
+
+        tracing::debug!("created new pty with id {token}");
         self.terminals.insert(token, pty);
     }
 
+    /// Returns a reference to the terminal with the corresponding unique id (token),
+    /// or None if one does not exist
+    ///
+    /// ### Arguments
+    /// * `token` - Unique id representing a VM
     pub fn get(&self, token: usize) -> Option<&Box<dyn OathgatePty>> {
         self.terminals.get(&token)
     }
 
+    /// Returns a reference to the active pty if one is set, or `None` if there is
+    /// no active pty
+    ///
+    /// The active pty represents the pty currently being displayed by a TUI
     pub fn get_active(&self) -> Option<&Box<dyn OathgatePty>> {
         self.active.and_then(|id| self.get(id))
     }
 
+    /// Sets the pty with the corresponding id (token) as the active pty
+    ///
+    /// ### Arguments
+    /// * `token` - Unique id of the pty to set as active
     pub fn set_active(&mut self, token: usize) {
         self.active = Some(token);
     }
 
+    /// Helper function to write to the active pty.  If no pty is set as active,
+    /// the data is discarded (not written or queued).
+    ///
+    /// ### Arguments
+    /// * `data` - Data to write to the active pty
     pub fn write_to_pty(&self, data: &[u8]) -> io::Result<()> {
         match self.get_active() {
             Some(term) => term.write_pty(data),
@@ -99,53 +128,44 @@ impl TerminalMap {
         }
     }
 
+    /// Returns an iterator over all ptys currently stored in this terminal map
     pub fn all(&self) -> impl Iterator<Item = &Box<dyn OathgatePty>> {
         self.terminals.values()
     }
-}
 
-pub struct TermEmulator {
-    pty: vt100::Parser,
-}
-
-impl TermEmulator {
-    pub fn new() -> Arc<RwLock<Self>> {
-        Arc::new(RwLock::new(Self::default()))
-    }
-
-    pub fn set_rect(&mut self, r: Rect) {
-        self.set_size(r.height, r.width);
-    }
-
+    /// Sets the size to use when creating new ptys
+    ///
+    /// ### Arguments
+    /// * `rows` - Number of rows to set in the pty
+    /// * `cols` - Number of columns to set in the pty
     pub fn set_size(&mut self, rows: u16, cols: u16) {
-        let (old_rows, old_cols) = self.pty.screen().size();
-        if old_rows != rows || old_cols != cols {
-            self.pty.set_size(rows - 2, cols);
-            tracing::debug!(rows = rows - 2, cols, "updating term size");
+        tracing::debug!("setting default pty size to {rows}x{cols}");
+        let (old_rows, old_cols) = self.winsz;
+        if rows != old_rows || cols != old_cols {
+            self.winsz = (rows, cols);
+
+            // update all terminals, as applicable
+            for term in self.all() {
+                if let Err(error) = term.resize_pty(rows, cols) {
+                    tracing::warn!(?error, "unable to resize terminal");
+                }
+            }
         }
     }
 
-    pub fn process(&mut self, buf: &[u8]) {
-        self.pty.process(buf);
-    }
-
-    pub fn screen(&self) -> &vt100::Screen {
-        self.pty.screen()
-    }
-
-    /// Returns the size of the terminal area in (rows, cols)
-    pub fn size(&self) -> (u16, u16) {
-        self.screen().size()
+    /// Returns the current size used to create ptys
+    pub fn get_size(&self) -> (u16, u16) {
+        self.winsz
     }
 }
 
-impl Default for TermEmulator {
+impl Default for TerminalMap {
     fn default() -> Self {
-        let rows = 24;
-        let cols = 80;
-        let scrollback = 0; // infinite
-        let pty = vt100::Parser::new(rows, cols, scrollback);
-        Self { pty }
+        Self {
+            terminals: HashMap::new(),
+            winsz: (24, 80),
+            active: None,
+        }
     }
 }
 
@@ -243,16 +263,14 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
                     tracing::debug!(%vmid, "vm starting, opening connection to vm tty");
 
                     let mut fpty = FabrialPty::new(vmid as u32, 3715)?;
-                    poller.registry().register(&mut fpty, Token(poller_next_id), Interest::READABLE)?;
+                    poller.registry().register(
+                        &mut fpty,
+                        Token(poller_next_id),
+                        Interest::READABLE,
+                    )?;
                     terminals.write().insert(poller_next_id, Box::new(fpty));
                     terminals.write().set_active(poller_next_id);
                     poller_next_id = poller_next_id + 1;
-
-                    /*
-                        let (rows, cols) = pty.read().size();
-                        handle.set_pty(sock);
-                        handle.resize_pty(rows, cols)?;
-                    */
                 }
                 Token(token) => match terminals.read().get(token) {
                     None => tracing::debug!(token, "unknown mio token"),
@@ -301,7 +319,9 @@ fn ui(frame: &mut Frame, terminals: &ArcTerminalMap) {
         .constraints(&[Constraint::Percentage(100), Constraint::Min(1)])
         .split(frame.size());
 
-    //term.write().set_rect(chunks[0]);
+    terminals
+        .write()
+        .set_size(chunks[0].height - 2, chunks[0].width);
 
     let block = Block::default()
         .borders(Borders::ALL)
