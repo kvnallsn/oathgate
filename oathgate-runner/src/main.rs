@@ -195,7 +195,7 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
     let mut poller = Poll::new()?;
     let mut poller_next_id = 10;
 
-    let mut stderr = handle.stderr_receiver()?;
+    let mut stderr = handle.stderr()?;
     stderr.set_nonblocking(true)?;
 
     let mut mask = SigSet::empty();
