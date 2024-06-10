@@ -95,7 +95,7 @@ impl Ipv4Header {
         let length = cast!(be16, hdr[2..4]);
         let id = cast!(be16, hdr[4..6]);
         let flags = hdr[6] >> 5;
-        let frag_offset = cast!(be16, hdr[6..8]) & 0x1FFF;
+        let frag_offset = (cast!(be16, hdr[6..8]) & 0x1FFF) * 8;
         let ttl = hdr[8];
         let protocol = hdr[9];
         let checksum = cast!(be16, hdr[10..12]);
@@ -195,9 +195,35 @@ impl Ipv4Packet {
         Ok(Self { header, data })
     }
 
+    /// Returns the unique identifer for this packet
+    pub fn id(&self) -> u16 {
+        self.header.id
+    }
+
+    /// Returns the flags set on this packet
+    pub fn flags(&self) -> u8 {
+        self.header.flags
+    }
+
+    /// Returns true if this packet contains fragments
+    pub fn has_fragments(&self) -> bool {
+        self.header.flags & 0x01 == 0x01
+    }
+
+    /// Returns the offset of the fragment (or zero, if no fragments)
+    pub fn fragment_offset(&self) -> u16 {
+        self.header.frag_offset
+    }
+
     /// Returns the next layer (i.e., transport) layer protocol
     pub fn protocol(&self) -> u8 {
         self.header.protocol
+    }
+
+    /// Returns the total length of the packet, as stored in the ipv4
+    /// header (includes header + payload)
+    pub fn len(&self) -> u16 {
+        self.header.length
     }
 
     /// Returns the source ip address
@@ -208,6 +234,11 @@ impl Ipv4Packet {
     /// Returns the destination ip address
     pub fn dest(&self) -> Ipv4Addr {
         self.header.dst
+    }
+
+    /// Returns the size of this header, in bytes
+    pub fn header_length(&self) -> usize {
+        self.header.header_length()
     }
 
     /// Returns the slice of data containing the Ipv4 packet's payload (aka the transport layer
@@ -232,6 +263,33 @@ impl Ipv4Packet {
     /// Returns this packet as a vector of bytes
     pub fn into_bytes(self) -> Vec<u8> {
         self.data
+    }
+
+    /// Appends data to the end of this packet (useful for fragmented packets)
+    pub fn add_fragment_data(&mut self, offset: u16, payload: &[u8]) {
+        tracing::trace!("appending {} bytes to ipv4 packet at offset 0x{offset:02x}", payload.len());
+        let uoffset = usize::from(offset);
+        let end = self.payload().len();
+
+        if uoffset == end {
+            self.data.extend_from_slice(&payload);
+            self.header.length += payload.len() as u16;
+        } else if uoffset > end {
+            // need to pad the data until we reach the offset?
+            self.data.resize(uoffset, 0);
+            self.data.extend_from_slice(&payload);
+            self.header.length = offset + (payload.len() as u16);
+        } else {
+            let end = uoffset + payload.len();
+            self.data[uoffset..end].copy_from_slice(&payload);
+        }
+    }
+
+    /// Applies changes from the header field to the underlying data
+    pub fn finalize(&mut self) {
+        self.header.flags = 0;
+        self.header.frag_offset = 0;
+        self.header.as_bytes(&mut self.data);
     }
 
     /// Sets the source ip address to the provided value and recomputes the header checksum

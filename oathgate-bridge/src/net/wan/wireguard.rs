@@ -2,6 +2,7 @@
 
 use std::{
     borrow::Cow,
+    collections::HashMap,
     fmt::Debug,
     io::ErrorKind,
     net::{Ipv4Addr, SocketAddr},
@@ -54,6 +55,9 @@ pub struct WgDevice {
 
     /// Maps & tracks outbound connections
     nat: NatTable,
+
+    /// Cache used to store/rebuild fragmented packets
+    cache: HashMap<u16, Ipv4Packet>,
 }
 
 #[derive(Clone)]
@@ -116,6 +120,7 @@ impl WgDevice {
             handle,
             poll,
             nat: NatTable::new(),
+            cache: HashMap::new(),
         })
     }
 
@@ -124,7 +129,7 @@ impl WgDevice {
     /// ### Arguments
     /// * `action` - Outcome of encapsulate/decapsulate/update_timers
     fn handle_tun_result(
-        &self,
+        &mut self,
         action: TunnResult,
         router: &RouterHandle,
         sock: &UdpSocket,
@@ -145,20 +150,53 @@ impl WgDevice {
             TunnResult::WriteToTunnelV4(pkt, ip) => {
                 let hdr = Ipv4Header::extract_from_slice(&pkt)?;
                 tracing::trace!(src = ?ip, dst = ?hdr.dst, "[wg] write {} bytes to tunnel", pkt.len());
-                let pkt = pkt.to_vec();
-                let mut pkt = Ipv4Packet::parse(pkt)?;
+                let pkt = Ipv4Packet::parse(pkt.to_vec())?;
 
-                if let Some(orig) = self.nat.get(&pkt) {
-                    tracing::trace!(ip = ?orig, "[wg] setting original ipv4 address");
-                    pkt.unmasquerade(orig);
-                    router.route_ipv4(pkt);
-                } else {
-                    tracing::warn!(
-                        protocol = pkt.protocol(),
-                        src = %pkt.src(),
-                        dst = %pkt.dest(),
-                        "[wg] no nat entry found"
-                    );
+                // rebuild fragmented packets
+                let pkt = match (pkt.has_fragments(), pkt.fragment_offset()) {
+                    (false, 0) => Some(pkt),
+                    (true, 0) => {
+                        self.cache.insert(pkt.id(), pkt);
+                        None
+                    }
+                    (true, offset) => {
+                        self.cache
+                            .get_mut(&pkt.id())
+                            .map(|fpkt| fpkt.add_fragment_data(offset, pkt.payload()));
+                        None
+                    }
+                    (false, offset) => match self.cache.remove(&pkt.id()) {
+                        Some(mut fpkt) => {
+                            fpkt.add_fragment_data(offset, pkt.payload());
+                            fpkt.finalize();
+                            Some(fpkt)
+                        }
+                        None => {
+                            return Err(NetworkError::Generic("missing frag packet data".into()))?
+                        }
+                    },
+                };
+
+                // undo nat'd packets
+                if let Some(mut pkt) = pkt {
+                    if let Some(orig) = self.nat.get(&pkt) {
+                        tracing::trace!(ip = ?orig, "[wg] setting original ipv4 address");
+                        pkt.unmasquerade(orig);
+                        router.route_ipv4(pkt);
+                    } else {
+                        tracing::warn!(
+                            protocol = pkt.protocol(),
+                            src = %pkt.src(),
+                            dst = %pkt.dest(),
+                            id = %pkt.id(),
+                            flags = %pkt.flags(),
+                            hdrlen = %pkt.header_length(),
+                            length = %pkt.len(),
+                            "[wg] no nat entry found",
+                        );
+
+                        tracing::trace!("packet bytes: {:02x?}", &pkt.as_bytes()[..28]);
+                    }
                 }
             }
             TunnResult::WriteToTunnelV6(pkt, ip) => {

@@ -84,20 +84,40 @@ impl NatTable {
     /// Returns the NAT'd ipv4 address for a packet, if one exists
     pub fn get(&self, pkt: &Ipv4Packet) -> Option<Ipv4Addr> {
         let src = pkt.src();
+
         match pkt.protocol() {
             NET_PROTOCOL_ICMP => {
                 let id = cast!(be16, &pkt.payload()[4..6]);
-                tracing::trace!(proto = "icmp", %src, %id, "[nat] looking up entry");
+                tracing::trace!(
+                    id = pkt.id(),
+                    len = pkt.len(),
+                    proto = "icmp",
+                    %src, %id,
+                    "[nat] looking up entry"
+                );
                 self.table.get(&NatEntry::Icmp(src, id)).copied()
             }
             NET_PROTOCOL_TCP => {
                 let port = cast!(be16, &pkt.payload()[2..4]);
-                tracing::trace!(proto = "tcp", %src, %port, "[nat] looking up entry");
+                tracing::trace!(
+                    id = pkt.id(),
+                    len = pkt.len(),
+                    proto = "tcp",
+                    %src, %port,
+                    "[nat] looking up entry"
+                );
+
                 self.table.get(&NatEntry::Tcp(src, port)).copied()
             }
             NET_PROTOCOL_UDP => {
                 let port = cast!(be16, &pkt.payload()[2..4]);
-                tracing::trace!(proto = "tcp", %src, %port, "[nat] looking up entry");
+                tracing::trace!(
+                    id = pkt.id(),
+                    len = pkt.len(),
+                    proto = "icmp",
+                    %src, %port,
+                    "[nat] looking up entry"
+                );
                 self.table.get(&NatEntry::Udp(src, port)).copied()
             }
             _ => None,
