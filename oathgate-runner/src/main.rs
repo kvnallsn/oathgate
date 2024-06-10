@@ -1,6 +1,7 @@
 use std::{
+    collections::HashMap,
     fs::File,
-    io::{Read, Write},
+    io,
     os::{
         fd::{AsRawFd, OwnedFd},
         unix::thread::JoinHandleExt,
@@ -15,10 +16,7 @@ use crossterm::{
     ExecutableCommand,
 };
 use events::EventHandler;
-use mio::{
-    unix::{pipe::Receiver, SourceFd},
-    Events, Interest, Poll, Token,
-};
+use mio::{unix::SourceFd, Events, Interest, Poll, Token};
 use nix::{
     sys::{
         signal::{SigSet, Signal},
@@ -40,11 +38,14 @@ use tracing::Level;
 use tui_term::{vt100, widget::PseudoTerminal};
 use vm::VmHandle;
 
+use crate::pty::{PipePty, OathgatePty};
+
 mod events;
+mod pty;
 mod vm;
 
 type Error = Box<dyn std::error::Error + 'static>;
-type VT100 = Arc<RwLock<TermEmulator>>;
+type ArcTerminalMap = Arc<RwLock<TerminalMap>>;
 
 #[derive(Parser)]
 pub struct Opts {
@@ -69,10 +70,43 @@ pub struct Config {
     machine: MachineConfig,
 }
 
+#[derive(Default)]
+pub struct TerminalMap {
+    terminals: HashMap<usize, Box<dyn OathgatePty>>,
+    active: Option<usize>,
+}
+
+impl TerminalMap {
+    pub fn insert(&mut self, token: usize, pty: Box<dyn OathgatePty>) {
+        self.terminals.insert(token, pty);
+    }
+
+    pub fn get(&self, token: usize) -> Option<&Box<dyn OathgatePty>> {
+        self.terminals.get(&token)
+    }
+
+    pub fn get_active(&self) -> Option<&Box<dyn OathgatePty>> {
+        self.active.and_then(|id| self.get(id))
+    }
+
+    pub fn set_active(&mut self, token: usize) {
+        self.active = Some(token);
+    }
+
+    pub fn write_to_pty(&self, data: &[u8]) -> io::Result<()> {
+        match self.get_active() {
+            Some(term) => term.write_pty(data),
+            None => Ok(()),
+        }
+    }
+
+    pub fn all(&self) -> impl Iterator<Item = &Box<dyn OathgatePty>> {
+        self.terminals.values()
+    }
+}
+
 pub struct TermEmulator {
     pty: vt100::Parser,
-    rows: u16,
-    cols: u16,
 }
 
 impl TermEmulator {
@@ -85,11 +119,10 @@ impl TermEmulator {
     }
 
     pub fn set_size(&mut self, rows: u16, cols: u16) {
-        if self.rows != rows && self.cols != cols {
-            self.rows = rows - 2;
-            self.cols = cols;
-            self.pty.set_size(self.rows, self.cols);
-            tracing::debug!(rows = self.rows, cols = self.cols, "updating term size");
+        let (old_rows, old_cols) = self.pty.screen().size();
+        if old_rows != rows || old_cols != cols {
+            self.pty.set_size(rows - 2, cols);
+            tracing::debug!(rows = rows - 2, cols, "updating term size");
         }
     }
 
@@ -103,7 +136,7 @@ impl TermEmulator {
 
     /// Returns the size of the terminal area in (rows, cols)
     pub fn size(&self) -> (u16, u16) {
-        (self.rows, self.cols)
+        self.screen().size()
     }
 }
 
@@ -113,7 +146,7 @@ impl Default for TermEmulator {
         let cols = 80;
         let scrollback = 0; // infinite
         let pty = vt100::Parser::new(rows, cols, scrollback);
-        Self { pty, rows, cols }
+        Self { pty }
     }
 }
 
@@ -135,20 +168,14 @@ fn bind_vhost() -> Result<OwnedFd, Error> {
     Ok(sfd)
 }
 
-fn run_vm(pty: VT100, mut handle: VmHandle, mut rx: Receiver) -> Result<(), Error> {
-    const TOKEN_STDIN: Token = Token(0);
-    const TOKEN_STDOUT: Token = Token(1);
+fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> {
     const TOKEN_STDERR: Token = Token(2);
     const TOKEN_SIGNAL: Token = Token(3);
     const TOKEN_HYPERVISOR: Token = Token(4);
-    const TOKEN_PTY: Token = Token(5);
 
     let mut poller = Poll::new()?;
 
-    let mut stdout = handle.stdout_receiver()?;
     let mut stderr = handle.stderr_receiver()?;
-
-    stdout.set_nonblocking(true)?;
     stderr.set_nonblocking(true)?;
 
     let mut mask = SigSet::empty();
@@ -160,12 +187,6 @@ fn run_vm(pty: VT100, mut handle: VmHandle, mut rx: Receiver) -> Result<(), Erro
     // bind a vhost socket
     let vhost = bind_vhost()?;
 
-    poller
-        .registry()
-        .register(&mut rx, TOKEN_STDIN, Interest::READABLE)?;
-    poller
-        .registry()
-        .register(&mut stdout, TOKEN_STDOUT, Interest::READABLE)?;
     poller
         .registry()
         .register(&mut stderr, TOKEN_STDERR, Interest::READABLE)?;
@@ -180,6 +201,14 @@ fn run_vm(pty: VT100, mut handle: VmHandle, mut rx: Receiver) -> Result<(), Erro
         Interest::READABLE,
     )?;
 
+    // register terminals
+    let mut stdio_term = PipePty::new(handle.child_mut())?;
+    poller
+        .registry()
+        .register(&mut stdio_term, Token(1), Interest::READABLE)?;
+    terminals.write().insert(1, Box::new(stdio_term));
+    terminals.write().set_active(1);
+
     //let stdout_log = File::create("stdout.log")?;
     //let mut stdout_log = BufWriter::new(stdout_log);
 
@@ -190,17 +219,6 @@ fn run_vm(pty: VT100, mut handle: VmHandle, mut rx: Receiver) -> Result<(), Erro
 
         for event in &events {
             match event.token() {
-                TOKEN_STDIN => {
-                    let sz = rx.read(&mut buf)?;
-                    handle.write_pty(&buf[..sz])?;
-                }
-                TOKEN_STDOUT => stdout.try_io(|| {
-                    let sz = nix::unistd::read(stdout.as_raw_fd(), &mut buf)?;
-                    tracing::trace!("read {sz} bytes from stdout");
-                    pty.write().process(&buf[..sz]);
-
-                    Ok(())
-                })?,
                 TOKEN_STDERR => stderr.try_io(|| {
                     let sz = nix::unistd::read(stderr.as_raw_fd(), &mut buf)?;
                     let msg = String::from_utf8_lossy(&buf[..sz]);
@@ -224,30 +242,37 @@ fn run_vm(pty: VT100, mut handle: VmHandle, mut rx: Receiver) -> Result<(), Erro
 
                     tracing::debug!(%vmid, "vm starting, opening connection to vm tty");
 
-                    let addr = VsockAddr::new(vmid.into(), 3715);
-                    let sock = nix::sys::socket::socket(
-                        AddressFamily::Vsock,
-                        nix::sys::socket::SockType::Stream,
-                        SockFlag::empty(),
-                        None,
-                    )?;
-                    nix::sys::socket::connect(sock.as_raw_fd(), &addr)?;
+                    /*
+                        let addr = VsockAddr::new(vmid.into(), 3715);
+                        let sock = nix::sys::socket::socket(
+                            AddressFamily::Vsock,
+                            nix::sys::socket::SockType::Stream,
+                            SockFlag::empty(),
+                            None,
+                        )?;
+                        nix::sys::socket::connect(sock.as_raw_fd(), &addr)?;
 
-                    poller.registry().register(
-                        &mut SourceFd(&sock.as_raw_fd()),
-                        TOKEN_PTY,
-                        Interest::READABLE,
-                    )?;
+                        poller.registry().register(
+                            &mut SourceFd(&sock.as_raw_fd()),
+                            TOKEN_PTY,
+                            Interest::READABLE,
+                        )?;
 
-                    let (rows, cols) = pty.read().size();
-                    handle.set_pty(sock);
-                    handle.resize_pty(rows, cols)?;
+                        let (rows, cols) = pty.read().size();
+                        handle.set_pty(sock);
+                        handle.resize_pty(rows, cols)?;
+                    }
+                    TOKEN_PTY => {
+                        let sz = handle.read_pty(&mut buf)?;
+                        pty.write().process(&buf[..sz]);
+                        */
                 }
-                TOKEN_PTY => {
-                    let sz = handle.read_pty(&mut buf)?;
-                    pty.write().process(&buf[..sz]);
-                }
-                Token(token) => tracing::debug!(%token, "unknown mio token"),
+                Token(token) => match terminals.read().get(token) {
+                    None => tracing::debug!(token, "unknown mio token"),
+                    Some(term) => {
+                        term.read_pty(&mut buf)?;
+                    }
+                },
             }
         }
     }
@@ -256,14 +281,13 @@ fn run_vm(pty: VT100, mut handle: VmHandle, mut rx: Receiver) -> Result<(), Erro
     nix::sys::signal::kill(Pid::from_raw(handle.pid() as i32), Signal::SIGTERM)?;
 
     tracing::debug!("waiting for vm process to stop");
-    drop(stdout);
     drop(stderr);
     handle.wait()?;
 
     Ok(())
 }
 
-fn run_tui<W: Write>(pty: VT100, mut stdin: W) -> Result<(), Error> {
+fn run_tui(terminals: ArcTerminalMap) -> Result<(), Error> {
     crossterm::terminal::enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
@@ -273,8 +297,8 @@ fn run_tui<W: Write>(pty: VT100, mut stdin: W) -> Result<(), Error> {
     let mut events = EventHandler::default();
     let mut should_quit = false;
     while !should_quit {
-        terminal.draw(|f| ui(f, &pty))?;
-        should_quit = events.handle(&pty, &mut stdin)?;
+        terminal.draw(|f| ui(f, &terminals))?;
+        should_quit = events.handle(&terminals)?;
     }
 
     crossterm::terminal::disable_raw_mode()?;
@@ -283,23 +307,30 @@ fn run_tui<W: Write>(pty: VT100, mut stdin: W) -> Result<(), Error> {
     Ok(())
 }
 
-fn ui(frame: &mut Frame, term: &VT100) {
+fn ui(frame: &mut Frame, terminals: &ArcTerminalMap) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints(&[Constraint::Percentage(100), Constraint::Min(1)])
         .split(frame.size());
 
-    term.write().set_rect(chunks[0]);
+    //term.write().set_rect(chunks[0]);
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title("[Running: VM]")
         .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let tr = term.read();
-    let pty = PseudoTerminal::new(tr.screen()).block(block);
-    frame.render_widget(pty, chunks[0]);
+    let tr = terminals.read();
+    match tr.get_active() {
+        Some(term) => {
+            let pty = term.pty();
+            let pty = pty.read();
+            let pty = PseudoTerminal::new(pty.screen()).block(block);
+            frame.render_widget(pty, chunks[0]);
+        }
+        None => (),
+    }
 
     let block = Block::default().borders(Borders::ALL);
     frame.render_widget(block, frame.size());
@@ -323,23 +354,22 @@ fn main() -> Result<(), Error> {
     let fd = File::open(&opts.config)?;
     let cfg: Config = serde_yaml::from_reader(fd)?;
 
-    let vm_handle = VmHandle::new("/tmp/oathgate.sock", cfg.machine)?;
+    let terminals = Arc::new(RwLock::new(TerminalMap::default()));
 
-    let (tx, rx) = mio::unix::pipe::new().unwrap();
-    let parser = TermEmulator::new();
+    let vm_handle = VmHandle::new("/tmp/oathgate.sock", cfg.machine)?;
 
     let handle = std::thread::Builder::new()
         .name(String::from("qemu-vm"))
         .spawn({
-            let parser = Arc::clone(&parser);
+            let terminals = Arc::clone(&terminals);
             move || {
-                if let Err(error) = run_vm(parser, vm_handle, rx) {
+                if let Err(error) = run_vm(terminals, vm_handle) {
                     tracing::error!(?error, "unable to run qemu vm");
                 }
             }
         })?;
 
-    run_tui(parser, tx)?;
+    run_tui(terminals)?;
 
     nix::sys::pthread::pthread_kill(handle.as_pthread_t(), Signal::SIGTERM)?;
 

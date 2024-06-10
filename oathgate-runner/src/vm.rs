@@ -90,6 +90,10 @@ impl VmHandle {
         Ok(VmHandle { id, child, pty: None })
     }
 
+    pub fn child_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+
     pub fn stdout_receiver(&mut self) -> io::Result<Receiver> {
         self.child
             .stdout
