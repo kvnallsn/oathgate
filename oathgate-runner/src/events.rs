@@ -23,7 +23,9 @@ impl EventHandler {
                     KeyEventKind::Press => {
                         return match key.modifiers {
                             KeyModifiers::CONTROL => self.handle_ctrl_key_press(key, terminals),
-                            KeyModifiers::NONE => self.handle_key_press(key, terminals),
+                            KeyModifiers::NONE | KeyModifiers::SHIFT => {
+                                self.handle_key_press(key, terminals)
+                            }
                             _ => Ok(false),
                         };
                     }
@@ -75,6 +77,7 @@ impl EventHandler {
         let term = terminals.read();
 
         match key.code {
+            KeyCode::Char('c') => term.write_to_pty(&[0x03])?,
             KeyCode::Char('d') => term.write_to_pty(&[0x04])?,
             KeyCode::Char('r') => term.write_to_pty(&[0x12])?,
             KeyCode::Char('u') => term.write_to_pty(&[0x15])?,

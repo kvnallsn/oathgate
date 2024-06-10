@@ -139,9 +139,9 @@ impl TerminalMap {
     /// * `rows` - Number of rows to set in the pty
     /// * `cols` - Number of columns to set in the pty
     pub fn set_size(&mut self, rows: u16, cols: u16) {
-        tracing::debug!("setting default pty size to {rows}x{cols}");
         let (old_rows, old_cols) = self.winsz;
         if rows != old_rows || cols != old_cols {
+            tracing::debug!("setting default pty size to {rows}x{cols} (was: {old_rows}x{old_cols})");
             self.winsz = (rows, cols);
 
             // update all terminals, as applicable
