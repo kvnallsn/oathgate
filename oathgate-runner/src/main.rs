@@ -21,7 +21,6 @@ use nix::{
     sys::{
         signal::{SigSet, Signal},
         signalfd::{SfdFlags, SignalFd},
-        socket::{AddressFamily, SockFlag, VsockAddr},
     },
     unistd::Pid,
 };
@@ -38,7 +37,7 @@ use tracing::Level;
 use tui_term::{vt100, widget::PseudoTerminal};
 use vm::VmHandle;
 
-use crate::pty::{PipePty, OathgatePty};
+use crate::pty::{FabrialPty, OathgatePty, PipePty};
 
 mod events;
 mod pty;
@@ -174,6 +173,7 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
     const TOKEN_HYPERVISOR: Token = Token(4);
 
     let mut poller = Poll::new()?;
+    let mut poller_next_id = 10;
 
     let mut stderr = handle.stderr_receiver()?;
     stderr.set_nonblocking(true)?;
@@ -242,30 +242,17 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
 
                     tracing::debug!(%vmid, "vm starting, opening connection to vm tty");
 
+                    let mut fpty = FabrialPty::new(vmid as u32, 3715)?;
+                    poller.registry().register(&mut fpty, Token(poller_next_id), Interest::READABLE)?;
+                    terminals.write().insert(poller_next_id, Box::new(fpty));
+                    terminals.write().set_active(poller_next_id);
+                    poller_next_id = poller_next_id + 1;
+
                     /*
-                        let addr = VsockAddr::new(vmid.into(), 3715);
-                        let sock = nix::sys::socket::socket(
-                            AddressFamily::Vsock,
-                            nix::sys::socket::SockType::Stream,
-                            SockFlag::empty(),
-                            None,
-                        )?;
-                        nix::sys::socket::connect(sock.as_raw_fd(), &addr)?;
-
-                        poller.registry().register(
-                            &mut SourceFd(&sock.as_raw_fd()),
-                            TOKEN_PTY,
-                            Interest::READABLE,
-                        )?;
-
                         let (rows, cols) = pty.read().size();
                         handle.set_pty(sock);
                         handle.resize_pty(rows, cols)?;
-                    }
-                    TOKEN_PTY => {
-                        let sz = handle.read_pty(&mut buf)?;
-                        pty.write().process(&buf[..sz]);
-                        */
+                    */
                 }
                 Token(token) => match terminals.read().get(token) {
                     None => tracing::debug!(token, "unknown mio token"),
