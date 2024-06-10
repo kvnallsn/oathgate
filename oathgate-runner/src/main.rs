@@ -260,17 +260,25 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
                     nix::unistd::read(csock, &mut vmid)?;
                     let vmid = u16::from_le_bytes(vmid);
 
-                    tracing::debug!(%vmid, "vm starting, opening connection to vm tty");
+                    tracing::debug!(%vmid, "vm starting, opening fabrial connection to vm");
 
-                    let mut fpty = FabrialPty::new(vmid as u32, 3715)?;
-                    poller.registry().register(
-                        &mut fpty,
-                        Token(poller_next_id),
-                        Interest::READABLE,
-                    )?;
-                    terminals.write().insert(poller_next_id, Box::new(fpty));
-                    terminals.write().set_active(poller_next_id);
-                    poller_next_id = poller_next_id + 1;
+                    match FabrialPty::connect(vmid as u32, 3715) {
+                        Ok(mut fpty) => {
+                            tracing::debug!("fabrial connected, switching ptys");
+                            poller.registry().register(
+                                &mut fpty,
+                                Token(poller_next_id),
+                                Interest::READABLE,
+                            )?;
+                            terminals.write().insert(poller_next_id, Box::new(fpty));
+                            terminals.write().set_active(poller_next_id);
+                            poller_next_id = poller_next_id + 1;
+                        }
+                        Err(error) => tracing::warn!(
+                            ?error,
+                            "unable to connect to fabrial, is the service running?"
+                        ),
+                    }
                 }
                 Token(token) => match terminals.read().get(token) {
                     None => tracing::debug!(token, "unknown mio token"),

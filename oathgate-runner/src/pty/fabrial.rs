@@ -27,7 +27,7 @@ impl FabrialPty {
     /// ### Arguments
     /// * `cid` - Unique idenifier for VM (control)
     /// * `port` - Port to connect (unique per cid)
-    pub fn new(cid: u32, port: u32) -> io::Result<Self> {
+    pub fn connect(cid: u32, port: u32) -> io::Result<Self> {
         let addr = VsockAddr::new(cid, port);
         let sock = nix::sys::socket::socket(
             AddressFamily::Vsock,
