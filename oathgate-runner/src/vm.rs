@@ -24,7 +24,7 @@ macro_rules! cmd {
 pub struct VmHandle {
     /// Unique identifer for this vm.  Currently derived from the last two
     /// bytes of the the MAC address
-    id: usize,
+    id: u32,
 
     /// Reference to the process running the virtual machine
     child: Child,
@@ -54,7 +54,10 @@ impl VmHandle {
             "-kernel",
             machine.kernel,
             "-append",
-            "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda1 reboot=k",
+            format!(
+                "earlyprintk=ttyS0 console=ttyS0 root={} reboot=k",
+                machine.root
+            ),
             "-nodefaults",
             "-no-user-config",
             "-nographic",
@@ -85,8 +88,14 @@ impl VmHandle {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        let id = cid as usize;
-        Ok(VmHandle { id, child })
+        Ok(VmHandle { id: cid, child })
+    }
+
+    /// Returns the unique ID for this virtual machine.
+    ///
+    /// Currently, this is the last two bytes of the machine's MAC address
+    pub fn id(&self) -> u32 {
+        self.id
     }
 
     pub fn child_mut(&mut self) -> &mut Child {

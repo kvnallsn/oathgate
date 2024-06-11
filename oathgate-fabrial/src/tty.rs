@@ -39,15 +39,18 @@ pub enum SocketAction {
 impl SockTTY {
     pub fn spawn(client: RawFd, cmd: &str) -> Result<(), super::Error> {
         let cmd = std::ffi::CString::new(cmd)?;
+        let env = ["TERM=xterm-256color"]
+            .into_iter()
+            .filter_map(|v| std::ffi::CString::new(v).ok())
+            .collect::<Vec<_>>();
 
         match unsafe { forkpty(None, None) }? {
             ForkptyResult::Child => {
                 let args: [std::ffi::CString; 1] = [cmd.clone()];
-                let env: [std::ffi::CString; 0] = [];
                 nix::unistd::execve(&cmd, &args, &env)?;
 
                 tracing::error!("execve returned!");
-                std::process::exit(0);
+                std::process::exit(-1);
             }
             ForkptyResult::Parent { child, master } => {
                 let stty = Self {

@@ -76,7 +76,8 @@ fn run(opts: Opts) -> Result<(), Error> {
 
             bind(sock.as_raw_fd(), &addr)?;
 
-            if let Err(error) = notify_started(cid, 3715) {
+            // the cid and port are the same (for now)
+            if let Err(error) = notify_started(cid, cid) {
                 tracing::warn!(?error, "unable to notify hypervisor of vm start");
             }
 

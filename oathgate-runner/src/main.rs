@@ -62,6 +62,7 @@ pub struct MachineConfig {
     pub memory: String,
     pub kernel: PathBuf,
     pub disk: PathBuf,
+    pub root: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -171,12 +172,16 @@ impl Default for TerminalMap {
     }
 }
 
-fn bind_vhost() -> Result<OwnedFd, Error> {
+/// Binds a vhost socket on the hypervisor CID (aka 2) and the specified port
+///
+/// ### Arguments
+/// * `port` - Port to bind on the hypervisor cid
+fn bind_vhost(port: u32) -> Result<OwnedFd, Error> {
     use nix::sys::socket::{
         bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType, VsockAddr,
     };
 
-    let addr = VsockAddr::new(2, 3715);
+    let addr = VsockAddr::new(2, port);
     let sfd = socket(
         AddressFamily::Vsock,
         SockType::Stream,
@@ -207,7 +212,7 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
     let sfd = SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK)?;
 
     // bind a vhost socket
-    let vhost = bind_vhost()?;
+    let vhost = bind_vhost(handle.id())?;
 
     poller
         .registry()
