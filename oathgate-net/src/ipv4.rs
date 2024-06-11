@@ -267,7 +267,10 @@ impl Ipv4Packet {
 
     /// Appends data to the end of this packet (useful for fragmented packets)
     pub fn add_fragment_data(&mut self, offset: u16, payload: &[u8]) {
-        tracing::trace!("appending {} bytes to ipv4 packet at offset 0x{offset:02x}", payload.len());
+        tracing::trace!(
+            "appending {} bytes to ipv4 packet at offset 0x{offset:02x}",
+            payload.len()
+        );
         let uoffset = usize::from(offset);
         let end = self.payload().len();
 
