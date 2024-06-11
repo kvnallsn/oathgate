@@ -63,6 +63,8 @@
 ## About The Project
 Oathgate is a userspace networking stack with support for Qemu virtual machines via the vhost-user protocol.  It includes a layer 2 switch and layer 3 IP router and supports various WAN connection types. It supports logging traffic, encrypted WAN connections, and includes a basic DHCPv4 server to simplify virtual machine setup.
 
+![Demo](./images/demo.svg)
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
