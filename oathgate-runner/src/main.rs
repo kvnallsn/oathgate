@@ -54,6 +54,10 @@ pub struct Opts {
     /// Verbosity (-v, -vv, -vvv)
     #[clap(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    /// Location on disk to save log output
+    #[clap(short, long, default_value = "oathgate.log")]
+    logfile: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -367,7 +371,7 @@ fn ui(frame: &mut Frame, terminals: &ArcTerminalMap) {
 fn main() -> Result<(), Error> {
     let opts = Opts::parse();
 
-    let fd = File::create("output.log")?;
+    let fd = File::create(&opts.logfile)?;
     tracing_subscriber::FmtSubscriber::builder()
         .with_max_level(Level::DEBUG)
         .with_writer(fd)

@@ -52,6 +52,7 @@
     </li>
     <li><a href="#usage">Usage</a></li>
     <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
   </ol>
@@ -70,7 +71,7 @@ Oathgate is a userspace networking stack with support for Qemu virtual machines 
 
 ### Built With
 
-* [![Rust][rust-shield]][rust-url]
+[![Rust][rust-shield]][rust-url]
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -82,10 +83,23 @@ If you plan to build from source, Oathgate is built using Rust. See the prerequi
 
 ### Prerequisites
 
-* Rust / Cargo
+* Rust / Cargo 1.75+
   ```sh
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   ```
+
+* Qemu
+  ```sh
+  sudo apt install qemu-system
+  ```
+
+* A kernel with support for the `vhost-vsock` protocol
+  ```sh
+  cat /boot/<kernel_config> | grep VHOST_VSOCK   # check if support is present (i.e., y or m)
+  sudo modprobe vhost-vsock                      # load the kernel module
+  ```
+
+* Access to the `/dev/kvm` device (for kvm acceleration)
 
 ### Installation
 
@@ -93,12 +107,13 @@ If you plan to build from source, Oathgate is built using Rust. See the prerequi
    ```sh
    git clone https://github.com/kvnallsn/oathgate.git
    ```
+
 2. Build the executables
    ```sh
    cargo build --release
    ```
 
-The 
+The executables will be located in the `target/release` folder.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -186,6 +201,19 @@ See the [open issues](https://github.com/kvnallsn/oathgate/issues) for a full li
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
+<!-- TROUBLESHOOTING -->
+## Troubleshooting
+
+### oathgate-runner
+
+If oathgate-runner fails to start, or only displays a black screen, the best place to check is the log file (named `oathgate.log` unless renamed via the `-l` cli switch).
+
+| Error         | Cause                                                  | Fix                                                             |
+| ------------- |--------------------------------------------------------| --------------------------------------------------------------- |
+| EADDRNOTAVAIL | `vhost-vsock` kernel module not loaded                 | Load the approriate kernel moduel (`sudo modprobe vhost-vsock`) |
+| kvm module permission denied | User does not have access to `/dev/kvm` | Add user to approproate group (usually `kvm`)                   |
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- CONTRIBUTING -->
 ## Contributing
