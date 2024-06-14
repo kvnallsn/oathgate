@@ -34,6 +34,7 @@ use ratatui::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::Level;
+use tracing_subscriber::fmt::writer::{BoxMakeWriter, Tee};
 use tui_term::widget::PseudoTerminal;
 use vm::VmHandle;
 
@@ -50,6 +51,10 @@ type ArcTerminalMap = Arc<RwLock<TerminalMap>>;
 pub struct Opts {
     /// Path to configuration file
     config: PathBuf,
+
+    /// Run in background / as daemon
+    #[clap(short, long)]
+    daemon: bool,
 
     /// Verbosity (-v, -vv, -vvv)
     #[clap(short, long, action = clap::ArgAction::Count)]
@@ -217,6 +222,7 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
 
     // bind a vhost socket
     let vhost = bind_vhost(handle.id())?;
+    tracing::info!("staring vm, id = {}", handle.id());
 
     poller
         .registry()
@@ -368,13 +374,25 @@ fn ui(frame: &mut Frame, terminals: &ArcTerminalMap) {
     frame.render_widget(explanation, chunks[1]);
 }
 
+fn get_log_writer(opts: &Opts) -> Result<BoxMakeWriter, Error> {
+    let file = File::options()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open(&opts.logfile)?;
+
+    match opts.daemon {
+        false => Ok(BoxMakeWriter::new(file)),
+        true => Ok(BoxMakeWriter::new(Tee::new(file, io::stderr))),
+    }
+}
+
 fn main() -> Result<(), Error> {
     let opts = Opts::parse();
 
-    let fd = File::create(&opts.logfile)?;
     tracing_subscriber::FmtSubscriber::builder()
         .with_max_level(Level::DEBUG)
-        .with_writer(fd)
+        .with_writer(get_log_writer(&opts)?)
         .init();
 
     let fd = File::open(&opts.config)?;
@@ -395,9 +413,10 @@ fn main() -> Result<(), Error> {
             }
         })?;
 
-    run_tui(terminals)?;
-
-    nix::sys::pthread::pthread_kill(handle.as_pthread_t(), Signal::SIGTERM)?;
+    if !opts.daemon {
+        run_tui(terminals)?;
+        nix::sys::pthread::pthread_kill(handle.as_pthread_t(), Signal::SIGTERM)?;
+    }
 
     match handle.join() {
         Ok(_) => tracing::info!("vm stopped"),
