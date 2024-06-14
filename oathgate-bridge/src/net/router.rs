@@ -259,7 +259,7 @@ impl Router {
     }
 
     fn route_ip6(&self, pkt: Vec<u8>) -> Result<RouterAction, ProtocolError> {
-        tracing::warn!("ipv6 not supported");
+        tracing::debug!("ipv6 not supported, dropping packet");
         Ok(RouterAction::Drop(pkt))
     }
 

@@ -846,6 +846,7 @@ name = "oathgate-fabrial"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "crossterm",
  "mio",
  "nix 0.29.0",
  "oathgate-net",
