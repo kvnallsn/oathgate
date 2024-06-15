@@ -1,8 +1,7 @@
 //! TTY functions
 
 use std::{
-    io,
-    os::fd::{AsRawFd, OwnedFd, RawFd},
+    io, os::fd::{AsRawFd, OwnedFd, RawFd}, thread::JoinHandle
 };
 
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
@@ -10,8 +9,10 @@ use nix::{
     ioctl_write_ptr_bad,
     libc::TIOCSWINSZ,
     pty::{forkpty, ForkptyResult, Winsize},
-    sys::{signal::Signal, socket::MsgFlags},
+    sys::{signal::Signal, socket::{MsgFlags, Shutdown}},
 };
+
+use crate::ErrorContext;
 
 /// Performs a non-blocking recv call, returning 0 if it would block (i.e., EAGAIN / EWOULDBLOCK)
 macro_rules! non_blocking_recv {
@@ -37,7 +38,7 @@ pub enum SocketAction {
 }
 
 impl SockTTY {
-    pub fn spawn(client: RawFd, cmd: &str) -> Result<(), super::Error> {
+    pub fn spawn(client: RawFd, cmd: &str) -> Result<JoinHandle<()>, super::Error> {
         let cmd = std::ffi::CString::new(cmd)?;
         let env = ["TERM=xterm-256color"]
             .into_iter()
@@ -58,24 +59,32 @@ impl SockTTY {
                     tty: master,
                 };
 
-                let _handle = std::thread::Builder::new()
+                let handle = std::thread::Builder::new()
                     .name(String::from("tty-thread"))
                     .spawn(move || {
                         if let Err(error) = stty.run() {
-                            tracing::warn!(?error, %child, "tty died");
+                            tracing::warn!(
+                                error = %error.source(),
+                                context = %error.context_str(),
+                                %child,
+                                "tty died"
+                            );
                         }
 
-                        // reap the child
+                        drop(stty);
+
+                        // shutdown socket and reap the child
                         tracing::debug!(%child, "attempting to reap child");
-                        match nix::sys::signal::kill(child, Signal::SIGKILL)
+                        match nix::sys::socket::shutdown(client, Shutdown::Both)
+                            .and_then(|_| nix::sys::signal::kill(child, Signal::SIGKILL))
                             .and_then(|_| nix::sys::wait::waitpid(child, None))
                         {
                             Ok(_) => tracing::debug!(%child, "child reaped"),
-                            Err(error) => tracing::warn!(?error, "unable to signal child"),
+                            Err(error) => tracing::warn!(?error, "unable to reap child"),
                         }
                     })?;
 
-                Ok(())
+                Ok(handle)
             }
         }
     }
@@ -92,6 +101,7 @@ impl SockTTY {
         poller
             .registry()
             .register(&mut SourceFd(&self.client), TOKEN_SOCK, Interest::READABLE)?;
+
         poller.registry().register(
             &mut SourceFd(&self.tty.as_raw_fd()),
             TOKEN_TTY,
@@ -100,30 +110,30 @@ impl SockTTY {
 
         let mut buf = [0u8; BUFFER_SIZE];
         let mut msg = Vec::with_capacity(BUFFER_SIZE * 4);
-        while let Ok(_) = poller.poll(&mut events, None) {
+        loop {
+            poller.poll(&mut events, None).context("poll failed")?;
+
             for event in &events {
                 match event.token() {
                     TOKEN_SOCK => 'sock: loop {
-                        match self.read_from_socket(&mut buf, &mut msg)? {
+                        match self.read_from_socket(&mut buf, &mut msg).context("read from tty failed")? {
                             SocketAction::WouldBlock => break 'sock,
                             SocketAction::Continue => (),
                             SocketAction::WriteToTTY => {
                                 tracing::trace!("read socket msg: {:02x?}", msg);
-                                self.write_to_tty(&msg)?;
+                                self.write_to_tty(&msg).context("write to tty failed")?;
                             }
                         }
                     },
                     TOKEN_TTY => {
-                        self.read_from_tty(&mut buf, &mut msg)?;
+                        self.read_from_tty(&mut buf, &mut msg).context("read from tty failed")?;
                         tracing::trace!("read tty msg: {:02x?}", msg);
-                        self.write_to_socket(&msg)?;
+                        self.write_to_socket(&msg).context("write to vsock failed")?;
                     }
                     Token(token) => tracing::debug!(%token, "unknown mio token"),
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Reads a message from the client

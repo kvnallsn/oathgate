@@ -10,7 +10,7 @@ use std::{
 use mio::unix::pipe::Receiver;
 use oathgate_net::types::MacAddress;
 
-use crate::MachineConfig;
+use crate::config::MachineConfig;
 
 macro_rules! cmd {
     ($cmd:expr, $($arg:expr),+) => {{
@@ -34,7 +34,7 @@ impl VmHandle {
     pub fn new<P: AsRef<Path>>(socket: P, machine: MachineConfig) -> io::Result<Self> {
         let socket = socket.as_ref();
 
-        let mac = MacAddress::generate();
+        let mac = machine.mac.unwrap_or_else(|| MacAddress::generate());
         let bytes = mac.as_bytes();
         let cid = u32::from_be_bytes([0x00, 0x00, bytes[4], bytes[5]]);
 
@@ -52,12 +52,9 @@ impl VmHandle {
             "-smp",
             "1",
             "-kernel",
-            machine.kernel,
+            machine.kernel.path(),
             "-append",
-            format!(
-                "earlyprintk=ttyS0 console=ttyS0 root={} reboot=k",
-                machine.root
-            ),
+            machine.kernel.as_qemu_append("ttyS0"),
             "-nodefaults",
             "-no-user-config",
             "-nographic",
@@ -71,7 +68,7 @@ impl VmHandle {
             "-numa",
             "node,memdev=mem",
             "-drive",
-            format!("id=root,file={},format=raw,if=virtio", machine.disk.display()),
+            machine.disk.as_qemu_drive("root"),
             "-chardev",
             format!("socket,id=chr0,path={}", socket.display()),
             "-netdev",

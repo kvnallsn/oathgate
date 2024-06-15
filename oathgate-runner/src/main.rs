@@ -1,3 +1,8 @@
+mod config;
+mod events;
+mod pty;
+mod vm;
+
 use std::{
     collections::HashMap,
     fs::File,
@@ -32,17 +37,15 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
-use serde::{Deserialize, Serialize};
 use tracing::Level;
 use tracing_subscriber::fmt::writer::{BoxMakeWriter, Tee};
 use tui_term::widget::PseudoTerminal;
 use vm::VmHandle;
 
-use crate::pty::{FabrialPty, OathgatePty, PipePty};
-
-mod events;
-mod pty;
-mod vm;
+use crate::{
+    config::Config,
+    pty::{FabrialPty, OathgatePty, PipePty},
+};
 
 type Error = Box<dyn std::error::Error + 'static>;
 type ArcTerminalMap = Arc<RwLock<TerminalMap>>;
@@ -63,20 +66,6 @@ pub struct Opts {
     /// Location on disk to save log output
     #[clap(short, long, default_value = "oathgate.log")]
     logfile: PathBuf,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct MachineConfig {
-    pub cpu: String,
-    pub memory: String,
-    pub kernel: PathBuf,
-    pub disk: PathBuf,
-    pub root: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Config {
-    machine: MachineConfig,
 }
 
 pub struct TerminalMap {
@@ -215,6 +204,7 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
     stderr.set_nonblocking(true)?;
 
     let mut mask = SigSet::empty();
+    mask.add(nix::sys::signal::SIGINT);
     mask.add(nix::sys::signal::SIGTERM);
     mask.thread_block()?;
 
@@ -265,6 +255,7 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
                 })?,
                 TOKEN_SIGNAL => match sfd.read_signal()? {
                     Some(sig) => match Signal::try_from(sig.ssi_signo as i32) {
+                        Ok(Signal::SIGINT) => break 'poll,
                         Ok(Signal::SIGTERM) => break 'poll,
                         Ok(signal) => tracing::debug!(%signal, "caught unhandled signal"),
                         Err(error) => tracing::warn!(%error, "unknown signal number"),
@@ -317,7 +308,19 @@ fn run_vm(terminals: ArcTerminalMap, mut handle: VmHandle) -> Result<(), Error> 
     Ok(())
 }
 
-fn run_tui(terminals: ArcTerminalMap) -> Result<(), Error> {
+fn run_tui(terminals: ArcTerminalMap, vm_handle: VmHandle) -> Result<(), Error> {
+    // spawn a thread to handle the vm
+    let handle = std::thread::Builder::new()
+        .name(String::from("qemu-vm"))
+        .spawn({
+            let terminals = Arc::clone(&terminals);
+            move || {
+                if let Err(error) = run_vm(terminals, vm_handle) {
+                    tracing::error!(?error, "unable to run qemu vm");
+                }
+            }
+        })?;
+
     crossterm::terminal::enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
@@ -333,6 +336,13 @@ fn run_tui(terminals: ArcTerminalMap) -> Result<(), Error> {
 
     crossterm::terminal::disable_raw_mode()?;
     std::io::stdout().execute(LeaveAlternateScreen)?;
+
+    nix::sys::pthread::pthread_kill(handle.as_pthread_t(), Signal::SIGTERM)?;
+
+    match handle.join() {
+        Ok(_) => tracing::info!("vm stopped"),
+        Err(error) => tracing::error!(?error, "unable to stop vm"),
+    }
 
     Ok(())
 }
@@ -402,25 +412,10 @@ fn main() -> Result<(), Error> {
 
     let vm_handle = VmHandle::new("/tmp/oathgate.sock", cfg.machine)?;
 
-    let handle = std::thread::Builder::new()
-        .name(String::from("qemu-vm"))
-        .spawn({
-            let terminals = Arc::clone(&terminals);
-            move || {
-                if let Err(error) = run_vm(terminals, vm_handle) {
-                    tracing::error!(?error, "unable to run qemu vm");
-                }
-            }
-        })?;
-
     if !opts.daemon {
-        run_tui(terminals)?;
-        nix::sys::pthread::pthread_kill(handle.as_pthread_t(), Signal::SIGTERM)?;
-    }
-
-    match handle.join() {
-        Ok(_) => tracing::info!("vm stopped"),
-        Err(error) => tracing::error!(?error, "unable to stop vm"),
+        run_tui(terminals, vm_handle)?;
+    } else {
+        run_vm(terminals, vm_handle)?;
     }
 
     Ok(())
