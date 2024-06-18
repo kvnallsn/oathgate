@@ -4,7 +4,7 @@ use std::{io, time::Duration};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::ArcTerminalMap;
+use crate::hypervisor::ArcTerminalMap;
 
 /// An `EventHandler` contains state for keyboard events
 #[derive(Default, Debug)]

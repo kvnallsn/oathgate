@@ -4,10 +4,9 @@ use std::{
     fmt::Debug,
     io,
     path::Path,
-    process::{Child, ExitStatus, Stdio},
+    process::{Child, Command, Stdio},
 };
 
-use mio::unix::pipe::Receiver;
 use oathgate_net::types::MacAddress;
 
 use crate::config::MachineConfig;
@@ -26,8 +25,8 @@ pub struct VmHandle {
     /// bytes of the the MAC address
     id: u32,
 
-    /// Reference to the process running the virtual machine
-    child: Child,
+    /// Command use to start the virtual machine
+    command: Command,
 }
 
 impl VmHandle {
@@ -79,13 +78,17 @@ impl VmHandle {
             format!("vhost-vsock-pci,guest-cid={cid}")
         );
 
-        let child = cmd
+        cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
 
-        Ok(VmHandle { id: cid, child })
+        Ok(VmHandle { id: cid, command: cmd })
+    }
+
+    /// Spawns a new vm, returning the child process information
+    pub fn start(&mut self) -> std::io::Result<Child> {
+        self.command.spawn()
     }
 
     /// Returns the unique ID for this virtual machine.
@@ -93,26 +96,6 @@ impl VmHandle {
     /// Currently, this is the last two bytes of the machine's MAC address
     pub fn id(&self) -> u32 {
         self.id
-    }
-
-    pub fn child_mut(&mut self) -> &mut Child {
-        &mut self.child
-    }
-
-    pub fn stderr(&mut self) -> io::Result<Receiver> {
-        self.child
-            .stderr
-            .take()
-            .map(mio::unix::pipe::Receiver::from)
-            .ok_or_else(|| io::Error::other("stderr missing"))
-    }
-
-    pub fn pid(&self) -> u32 {
-        self.child.id()
-    }
-
-    pub fn wait(&mut self) -> io::Result<ExitStatus> {
-        self.child.wait()
     }
 }
 
