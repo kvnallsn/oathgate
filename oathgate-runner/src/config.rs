@@ -1,8 +1,13 @@
 //! File format / configuration
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 use oathgate_net::types::MacAddress;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+
+use crate::HypervisorError;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MachineConfig {
@@ -28,6 +33,18 @@ pub struct DiskConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
     pub machine: MachineConfig,
+}
+
+impl Config {
+    /// Loads a configuration file from a path on disk
+    ///
+    /// ### Arguments
+    /// * `path` - Path to file to load
+    pub fn from_yaml<P: AsRef<Path>>(path: P) -> Result<Self, HypervisorError> {
+        let fd = File::open(path)?;
+        let cfg: Config = serde_yaml::from_reader(fd)?;
+        Ok(cfg)
+    }
 }
 
 impl KernelConfig {

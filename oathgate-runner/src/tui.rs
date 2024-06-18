@@ -18,7 +18,7 @@ use ratatui::{
 };
 use tui_term::widget::PseudoTerminal;
 
-use crate::hypervisor::{ArcTerminalMap, Hypervisor};
+use crate::{hypervisor::{ArcTerminalMap, Hypervisor}, HypervisorError};
 
 use self::events::EventHandler;
 
@@ -29,7 +29,7 @@ use self::events::EventHandler;
 ///
 /// ### Arguments
 /// * `hypervisor` - Hypervisor (and vm) this tui will control
-pub fn run(mut hypervisor: Hypervisor) -> Result<(), super::Error> {
+pub fn run(mut hypervisor: Hypervisor) -> Result<(), HypervisorError> {
     let terminals = hypervisor.terminals();
 
     // spawn a thread to handle the vm

@@ -1,7 +1,7 @@
 use std::{fs::File, io, path::PathBuf};
 
 use clap::Parser;
-use oathgate_runner::{config::Config, hypervisor::Hypervisor, tui, Error};
+use oathgate_runner::{config::Config, hypervisor::Hypervisor, tui};
 use tracing::Level;
 use tracing_subscriber::fmt::writer::{BoxMakeWriter, Tee};
 
@@ -12,7 +12,11 @@ pub struct Opts {
 
     /// Path to the network's unix socket (for a vhost-user network)
     #[clap(short, long)]
-    network: PathBuf,
+    bridge: PathBuf,
+
+    /// Name of this machine
+    #[clap(short, long)]
+    name: String,
 
     /// Run in background / as daemon
     #[clap(short, long)]
@@ -27,7 +31,7 @@ pub struct Opts {
     logfile: PathBuf,
 }
 
-fn get_log_writer(opts: &Opts) -> Result<BoxMakeWriter, Error> {
+fn get_log_writer(opts: &Opts) -> std::io::Result<BoxMakeWriter> {
     let file = File::options()
         .write(true)
         .append(true)
@@ -39,7 +43,7 @@ fn get_log_writer(opts: &Opts) -> Result<BoxMakeWriter, Error> {
         true => Ok(BoxMakeWriter::new(Tee::new(file, io::stderr))),
     }
 }
-fn main() -> Result<(), Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opts = Opts::parse();
 
     tracing_subscriber::FmtSubscriber::builder()
@@ -50,7 +54,7 @@ fn main() -> Result<(), Error> {
     let fd = File::open(&opts.config)?;
     let cfg: Config = serde_yaml::from_reader(fd)?;
 
-    let mut hypervisor = Hypervisor::new(&opts.network, cfg.machine)?;
+    let mut hypervisor = Hypervisor::new(&opts.bridge, opts.name, cfg.machine)?;
 
     if !opts.daemon {
         tui::run(hypervisor)?;

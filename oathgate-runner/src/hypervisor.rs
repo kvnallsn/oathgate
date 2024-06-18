@@ -4,6 +4,7 @@ mod terminal;
 mod vm;
 
 use std::{
+    borrow::Cow,
     os::fd::{AsRawFd, OwnedFd},
     path::Path,
     sync::Arc,
@@ -27,6 +28,7 @@ use crate::{
     config::MachineConfig,
     hypervisor::{terminal::TerminalMap, vm::VmHandle},
     pty::{FabrialPty, PipePty},
+    HypervisorError,
 };
 
 pub use self::terminal::ArcTerminalMap;
@@ -40,11 +42,11 @@ const TOKEN_SIGNAL: Token = Token(3);
 const TOKEN_HYPERVISOR: Token = Token(4);
 
 pub struct Hypervisor {
+    /// name of this hypervisor
+    name: String,
+
     /// vhost socket listening for connections
     vsock: OwnedFd,
-
-    /// handle to the signal file descriptor
-    signal: SignalFd,
 
     /// Handle to the virtual machine
     vm: VmHandle,
@@ -58,7 +60,11 @@ impl Hypervisor {
     ///
     /// ### Arguments
     /// * `port` - Port to bind on vhost socket
-    pub fn new<P: AsRef<Path>>(network: P, config: MachineConfig) -> Result<Self, super::Error> {
+    pub fn new<P: AsRef<Path>, S: Into<String>>(
+        network: P,
+        name: S,
+        config: MachineConfig,
+    ) -> Result<Self, HypervisorError> {
         let vm = VmHandle::new(network, config)?;
 
         tracing::debug!(
@@ -77,21 +83,19 @@ impl Hypervisor {
         bind(vsock.as_raw_fd(), &addr)?;
         listen(&vsock, Backlog::new(MAX_BACKLOG)?)?;
 
-        let mut mask = SigSet::empty();
-        mask.add(nix::sys::signal::SIGINT);
-        mask.add(nix::sys::signal::SIGTERM);
-        mask.thread_block()?;
-
-        let signal = SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK)?;
-
         let terminals = TerminalMap::new();
 
         Ok(Self {
+            name: name.into(),
             vsock,
-            signal,
             vm,
             terminals,
         })
+    }
+
+    /// Returns the name of this hypervisor
+    pub fn name(&self) -> &str {
+        self.name.as_str()
     }
 
     /// Returns a new atomically ref-counted (Arc) instance of the terminal map
@@ -100,13 +104,24 @@ impl Hypervisor {
     }
 
     /// Runs the hypervisor
-    pub fn run(&mut self) -> Result<(), super::Error> {
+    pub fn run(&mut self) -> Result<(), HypervisorError> {
         let mut poller = Poll::new()?;
         let mut poller_next_id = 10;
 
         let mut vm = self.vm.start()?;
 
-        let mut stderr = vm.stderr.take().map(|s| Receiver::from(s)).unwrap();
+        let mut mask = SigSet::empty();
+        mask.add(nix::sys::signal::SIGINT);
+        mask.add(nix::sys::signal::SIGTERM);
+        mask.thread_block()?;
+
+        let signal = SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK)?;
+
+        let mut stderr = vm
+            .stderr
+            .take()
+            .map(|s| Receiver::from(s))
+            .ok_or_else(|| HypervisorError::Other(Cow::Borrowed("stderr is missing")))?;
 
         stderr.set_nonblocking(true)?;
 
@@ -114,7 +129,7 @@ impl Hypervisor {
             .registry()
             .register(&mut stderr, TOKEN_STDERR, Interest::READABLE)?;
         poller.registry().register(
-            &mut SourceFd(&self.signal.as_raw_fd()),
+            &mut SourceFd(&signal.as_raw_fd()),
             TOKEN_SIGNAL,
             Interest::READABLE,
         )?;
@@ -146,10 +161,9 @@ impl Hypervisor {
 
                         Ok(())
                     })?,
-                    TOKEN_SIGNAL => match self.signal.read_signal()? {
+                    TOKEN_SIGNAL => match signal.read_signal()? {
                         Some(sig) => match Signal::try_from(sig.ssi_signo as i32) {
-                            Ok(Signal::SIGINT) => break 'poll,
-                            Ok(Signal::SIGTERM) => break 'poll,
+                            Ok(Signal::SIGINT) | Ok(Signal::SIGTERM) => break 'poll,
                             Ok(signal) => tracing::debug!(%signal, "caught unhandled signal"),
                             Err(error) => tracing::warn!(%error, "unknown signal number"),
                         },
@@ -199,6 +213,8 @@ impl Hypervisor {
         tracing::debug!("waiting for vm process to stop");
         drop(stderr);
         vm.wait()?;
+
+        tracing::debug!("vm stopped!");
 
         Ok(())
     }
