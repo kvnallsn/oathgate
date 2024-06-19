@@ -98,6 +98,11 @@ impl Hypervisor {
         self.name.as_str()
     }
 
+    /// Returns the context id that can be used to communicate with this hypervisor
+    pub fn cid(&self) -> u32 {
+        self.vm.id()
+    }
+
     /// Returns a new atomically ref-counted (Arc) instance of the terminal map
     pub fn terminals(&self) -> ArcTerminalMap {
         Arc::clone(&self.terminals)
