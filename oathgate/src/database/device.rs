@@ -1,8 +1,9 @@
 //! Represents a device in the database
 
-use std::fmt::Display;
+use std::{fmt::Display, path::PathBuf};
 
 use anyhow::Context;
+use console::{Style, StyledObject};
 use rusqlite::{
     params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
@@ -10,7 +11,7 @@ use rusqlite::{
 };
 use uuid::{ClockSequence, Timestamp, Uuid};
 
-use crate::cmd::AsTable;
+use crate::{cmd::AsTable, State};
 
 use super::Database;
 
@@ -158,6 +159,11 @@ impl Device {
         matches!(self.state, DeviceState::Running)
     }
 
+    /// Returns the path to the unix domain socket connected to this process
+    pub fn uds(&self, state: &State) -> PathBuf {
+        state.base.join(&self.name).with_extension("sock")
+    }
+
     /// Parses a Device from a sqlite row
     ///
     /// ### Arguments
@@ -241,6 +247,18 @@ impl ToSql for DeviceState {
     }
 }
 
+impl DeviceState {
+    fn styled(&self) -> StyledObject<String> {
+        let style = match self {
+            Self::Created => Style::new(),
+            Self::Stopped => Style::new().bold().red(),
+            Self::Running => Style::new().bold().green(),
+        };
+
+        style.apply_to(self.to_string())
+    }
+}
+
 impl AsTable for Device {
     fn header() -> &'static [&'static str] {
         &["Name", "PID", "Type", "State"]
@@ -257,6 +275,6 @@ impl AsTable for Device {
         print!(" {:width$} |", self.name, width = widths[0]);
         print!(" {:width$} |", self.pid, width = widths[1]);
         print!(" {:width$} |", self.ty, width = widths[2]);
-        print!(" {:width$} |", self.state, width = widths[3]);
+        print!(" {:width$} |", self.state.styled(), width = widths[3]);
     }
 }

@@ -3,6 +3,7 @@
 pub(crate) mod cmd;
 pub(crate) mod database;
 pub(crate) mod fork;
+pub(crate) mod process;
 
 use std::path::PathBuf;
 

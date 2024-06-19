@@ -4,16 +4,27 @@ use anyhow::Context;
 use rusqlite::{params, OptionalExtension, Row};
 use uuid::{ClockSequence, Timestamp, Uuid};
 
-use crate::cmd::AsTable;
+use crate::{cmd::AsTable, process::{self, ProcessState}};
 
 use super::Database;
 
 /// A shared is a representation of a VM stored in the database
 #[derive(Debug)]
 pub struct Shard {
+    /// A unique id used internally, should not be exposed
     id: Uuid,
+
+    /// Process id of the qemu / hypervisor
     pid: i32,
+
+    /// Context id used to communicate using vhost-vsock devices
+    cid: u32,
+
+    /// Name of this shard
     name: String,
+
+    /// Current state of the process (not saved in the database)
+    state: ProcessState,
 }
 
 impl Shard {
@@ -24,25 +35,28 @@ impl Shard {
                 id      TEXT PRIMARY KEY,
                 name    TEXT NOT NULL,
                 pid     INTEGER NOT NULL,
+                cid     INTEGER NOT NULL,
                 state   INTEGER NOT NULL
             )
         "#
     }
 
-    /// Creates a new device from the provided parameters
+    /// Creates a new shard from the provided parameters
     ///
     /// ### Arguments
     /// * `ctx` - Timestamp context used to generate a UUIDv7
-    /// * `pid` - Process Id of running process
-    /// * `name` - Name of this device
-    /// * `ty` - Type of device
-    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>>(ctx: C, pid: i32, name: S) -> Self {
+    /// * `pid` - Process Id of running shard
+    /// * `cid` - Context Id used with vhost-vsock
+    /// * `name` - Name of this shard
+    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>>(ctx: C, pid: i32, cid: u32, name: S) -> Self {
         let id = Uuid::new_v7(Timestamp::now(&ctx));
 
         Self {
             id,
             pid,
+            cid,
             name: name.into(),
+            state: ProcessState::Running,
         }
     }
 
@@ -51,15 +65,16 @@ impl Shard {
         db.transaction(|conn| {
             conn.execute(
                 "INSERT INTO
-                    shards (id, name, pid, state)
+                    shards (id, name, pid, cid, state)
                  VALUES
-                    (?1, ?2, ?3, ?4)
+                    (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     pid = excluded.pid,
+                    cid = excluded.cid,
                     state = excluded.state
                 ",
-                (&self.id, &self.name, &self.pid, 0),
+                (&self.id, &self.name, self.pid, self.cid, 0),
             )?;
 
             Ok(())
@@ -78,7 +93,7 @@ impl Shard {
         let shard = db.transaction(|conn| {
             let mut stmt = 
                 conn
-                .prepare("SELECT id, name, pid FROM shards WHERE name = ?1")?;
+                .prepare("SELECT id, name, pid, cid FROM shards WHERE name = ?1")?;
 
             let shard = stmt
                 .query_row(params![name], Self::from_row).optional()?;
@@ -97,7 +112,7 @@ impl Shard {
         let shards = db.transaction(|conn| {
             let mut stmt = 
                 conn
-                .prepare("SELECT id, name, pid FROM shards")?;
+                .prepare("SELECT id, name, pid, cid FROM shards")?;
 
             let shards = stmt
                 .query_map(params![], Self::from_row)?
@@ -133,31 +148,52 @@ impl Shard {
         self.pid
     }
 
+    /// Returns the context id used with vhost-vsock devices
+    pub fn cid(&self) -> u32 {
+        self.cid
+    }
+
+    /// Returns the current state of this process
+    pub fn state(&self) -> ProcessState {
+        self.state
+    }
+
     /// Parses a Shard from a sqlite row
     ///
     /// ### Arguments
     /// * `row` - Row returned from database
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let pid: i32 = row.get(2)?;
+        let state = process::check(pid).unwrap();
+
         Ok(Self{
             id: row.get(0)?,
             name: row.get(1)?,
-            pid: row.get(2)?,
+            pid,
+            cid: row.get(3)?,
+            state,
         })
     }
 }
 
 impl AsTable for Shard {
     fn header() -> &'static [&'static str] {
-        &["Name", "PID"]
+        &["Name", "PID", "CID", "State"]
     }
 
     fn update_col_width(&self, widths: &mut [usize]) {
+        let cid = format!("{:02x}", self.cid);
+
         widths[0] = std::cmp::max(widths[0], self.name.len());
         widths[1] = std::cmp::max(widths[1], self.pid.to_string().len());
+        widths[2] = std::cmp::max(widths[2], cid.to_string().len());
+        widths[3] = std::cmp::max(widths[3], self.state.to_string().len());
     }
 
     fn as_table_row(&self, widths: &[usize]) {
         print!(" {:width$} |", self.name, width = widths[0]);
         print!(" {:width$} |", self.pid, width = widths[1]);
+        print!(" {:width$x} |", self.cid, width = widths[2]);
+        print!(" {:width$} |", self.state.styled(), width = widths[3]);
     }
 }
