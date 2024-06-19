@@ -4,7 +4,6 @@ use clap::Parser;
 use oathgate_bridge::BridgeBuilder;
 use tracing::Level;
 
-
 #[derive(Parser)]
 pub(crate) struct Opts {
     /// Path to configuration file
@@ -37,7 +36,11 @@ fn main() {
         .with_max_level(level)
         .init();
 
-    if let Err(error) = BridgeBuilder::default().pcap(opts.pcap).build(opts.config, "oathgate.sock") {
+    if let Err(error) = BridgeBuilder::default()
+        .pcap(opts.pcap)
+        .build(opts.config, "oathgate.sock")
+        .and_then(|bridge| bridge.run())
+    {
         tracing::error!(?error, "unable to run oathgate-bridge");
     }
 }

@@ -30,6 +30,12 @@ pub struct BridgeBuilder {
     pcap: Option<PathBuf>,
 }
 
+pub struct Bridge {
+    socket_path: PathBuf,
+    pcap: Option<PathBuf>,
+    cfg: Config,
+}
+
 impl BridgeBuilder {
     /// Configures bridge to log all traffic transiting the switch
     ///
@@ -40,18 +46,18 @@ impl BridgeBuilder {
         self
     }
 
-    pub fn build<P: AsRef<Path>, S: Into<String>>(self, cfg: P, name: S) -> Result<(), Error> {
+    pub fn build<P: AsRef<Path>, S: Into<String>>(self, cfg: P, name: S) -> Result<Bridge, Error> {
         let name = name.into();
         let socket = format!("/tmp/oathgate/{name}.sock");
 
         let cfg = Config::load(cfg)?;
         tracing::debug!(?cfg, "bridge configuration");
 
-        if let Err(error) = run(socket, self.pcap, cfg) {
-            tracing::error!(?error, "unable to run oathgate");
-        }
-
-        Ok(())
+        Ok(Bridge {
+            socket_path: socket.into(),
+            pcap: self.pcap,
+            cfg,
+        })
     }
 }
 
@@ -72,55 +78,50 @@ fn parse_wan(cfg: WanConfig) -> Result<Option<Box<dyn Wan>>, Error> {
     }
 }
 
-fn run<P1: Into<PathBuf>, P2: Into<PathBuf>>(
-    socket: P1,
-    pcap: Option<P2>,
-    cfg: Config,
-) -> Result<(), Error> {
-    const TOKEN_VHOST: Token = Token(0);
-    let socket = socket.into();
-    let pcap = pcap.map(|p| p.into());
+impl Bridge {
+    pub fn run(self) -> Result<(), Error> {
+        const TOKEN_VHOST: Token = Token(0);
 
-    tracing::info!("creating oathgate bridge at {}", socket.display());
+        tracing::info!("creating oathgate bridge at {}", self.socket_path.display());
 
-    let mut socket = VHostSocket::new(socket)?;
-    let switch = VirtioSwitch::new(pcap)?;
+        let mut socket = VHostSocket::new(&self.socket_path)?;
+        let switch = VirtioSwitch::new(self.pcap)?;
 
-    // spawn the default route / upstream
-    let wan = parse_wan(cfg.wan)?;
+        // spawn the default route / upstream
+        let wan = parse_wan(self.cfg.wan)?;
 
-    let mut udp_handler = UdpHandler::default();
-    udp_handler.register_port_handler(DhcpServer::new(cfg.router.ipv4, cfg.router.dhcp));
+        let mut udp_handler = UdpHandler::default();
+        udp_handler.register_port_handler(DhcpServer::new(self.cfg.router.ipv4, self.cfg.router.dhcp));
 
-    // spawn thread to receive messages/packets
-    let _router = Router::builder()
-        .wan(wan)
-        .register_proto_handler(IcmpHandler::default())
-        .register_proto_handler(udp_handler)
-        .spawn(cfg.router.ipv4, switch.clone())?;
+        // spawn thread to receive messages/packets
+        let _router = Router::builder()
+            .wan(wan)
+            .register_proto_handler(IcmpHandler::default())
+            .register_proto_handler(udp_handler)
+            .spawn(self.cfg.router.ipv4, switch.clone())?;
 
-    let mut poller = Poll::new()?;
-    poller
-        .registry()
-        .register(&mut socket, TOKEN_VHOST, Interest::READABLE)?;
+        let mut poller = Poll::new()?;
+        poller
+            .registry()
+            .register(&mut socket, TOKEN_VHOST, Interest::READABLE)?;
 
 
-    let mut events = Events::with_capacity(10);
-    loop {
-        poller.poll(&mut events, None)?;
+        let mut events = Events::with_capacity(10);
+        loop {
+            poller.poll(&mut events, None)?;
 
-        for event in &events {
-            match event.token() {
-                TOKEN_VHOST => {
-                    if let Err(error) =
-                        socket.accept_and_spawn(DeviceOpts::default(), switch.clone())
-                    {
-                        tracing::error!(?error, "unable to accet connection");
+            for event in &events {
+                match event.token() {
+                    TOKEN_VHOST => {
+                        if let Err(error) =
+                            socket.accept_and_spawn(DeviceOpts::default(), switch.clone())
+                        {
+                            tracing::error!(?error, "unable to accet connection");
+                        }
                     }
+                    Token(token) => tracing::debug!(%token, "[main] unknown mio token"),
                 }
-                Token(token) => tracing::debug!(%token, "[main] unknown mio token"),
             }
         }
     }
 }
-
