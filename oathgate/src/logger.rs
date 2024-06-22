@@ -5,6 +5,7 @@ use std::{borrow::Cow, collections::BTreeMap, fmt::Display, path::Path, sync::{a
 use console::Style;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use time::{OffsetDateTime, format_description::well_known::Rfc2822};
 use tracing::{span, Level, Metadata};
 use uuid::Uuid;
 
@@ -43,6 +44,7 @@ pub struct OathgateEvent<'a> {
     pub module: Option<Cow<'a, str>>,
     pub level: Level,
     pub data: BTreeMap<Cow<'a, str>, DataType<'a>>,
+    pub ts: OffsetDateTime,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -187,12 +189,15 @@ impl<'a> tracing::field::Visit for OathgateEvent<'a> {
 impl<'a> OathgateEvent<'a> {
     pub fn new(metadata: &'a Metadata<'_>) -> Self {
         let data = BTreeMap::new();
+        let ts = OffsetDateTime::now_utc();
+
         Self {
             target: metadata.target().into(),
             line: metadata.line(),
             module: metadata.module_path().map(|m| Cow::Borrowed(m)),
             level: *metadata.level(),
             data,
+            ts,
         }
     }
 
@@ -203,21 +208,23 @@ impl<'a> OathgateEvent<'a> {
         let pipe = format!("{}", style.apply_to("\u{251c}"));
         let arrow = format!("{}", style.apply_to("\u{2514}"));
 
-        println!("{}: {}", style.apply_to(self.level), self.target);
+        println!("{}", style.apply_to(self.level));
 
         if let Some(msg) = self.data.get("message") {
             println!("{pipe} {msg}");
         }
+
+        println!("{pipe} {} {}", dim.apply_to("target ="), self.target);
 
         for (k, v) in &self.data {
             if *k == "message" {
                 continue;
             }
 
-            println!("{pipe} {} = {v}", dim.apply_to(k));
+            println!("{pipe} {} {} {v}", dim.apply_to(k), dim.apply_to("="));
         }
 
-        println!("{arrow} {}", self.target);
+        println!("{arrow} {}", dim.apply_to(self.ts.format(&Rfc2822).unwrap()));
     }
 
     fn level_style(&self) -> Style {

@@ -3,8 +3,8 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
 use rusqlite::params;
-use serde::Serialize;
 use serde_json::json;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::logger::{DataType, OathgateEvent};
@@ -22,6 +22,7 @@ impl LogEntry {
             device  BLOB NOT NULL,
             level   TEXT NOT NULL,
             target  TEXT NOT NULL,
+            ts      TEXT NOT NULL,
             module  TEXT,
             line    INTEGER,
             data    JSON
@@ -36,8 +37,8 @@ impl LogEntry {
 
         db.transaction(move |conn| {
             conn.execute(
-                "INSERT INTO logs (id, device, level, target, module, line, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                (&id, &device, &level, &event.target, &event.module, event.line, data),
+                "INSERT INTO logs (id, device, level, target, ts, module, line, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (&id, &device, &level, &event.target, &event.ts, &event.module, event.line, data),
             )?;
             Ok(())
         })?;
@@ -47,16 +48,18 @@ impl LogEntry {
 
     pub fn get(db: &Database, device: Uuid) -> anyhow::Result<Vec<OathgateEvent>> {
         let logs = db.transaction(|conn| {
-            let mut stmt = conn
-                .prepare("SELECT level, target, module, line, data FROM logs WHERE device = ?1")?;
+            let mut stmt = conn.prepare(
+                "SELECT level, target, ts, module, line, data FROM logs WHERE device = ?1",
+            )?;
 
             let res = stmt
                 .query_map(params![device], |row| {
                     let level: String = row.get(0)?;
                     let target: String = row.get(1)?;
-                    let module: Option<String> = row.get(2)?;
-                    let line: Option<u32> = row.get(3)?;
-                    let data: serde_json::Value = row.get(4)?;
+                    let ts: OffsetDateTime = row.get(2)?;
+                    let module: Option<String> = row.get(3)?;
+                    let line: Option<u32> = row.get(4)?;
+                    let data: serde_json::Value = row.get(5)?;
 
                     let level: tracing::Level = level.parse().unwrap();
                     let data: BTreeMap<Cow<'_, str>, DataType<'_>> =
@@ -65,6 +68,7 @@ impl LogEntry {
                     Ok(OathgateEvent {
                         level,
                         target: Cow::Owned(target),
+                        ts,
                         module: module.map(|m| Cow::Owned(m)),
                         line,
                         data,

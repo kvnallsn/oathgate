@@ -15,9 +15,10 @@ nix = { workspace = true }
 oathgate-bridge = { path = "../oathgate-bridge" }
 oathgate-runner = { path = "../oathgate-runner" }
 parking_lot = { workspace = true }
-rusqlite = { version = "0.31.0", features = ["serde_json", "uuid"] }
+rusqlite = { version = "0.31.0", features = ["serde_json", "time", "uuid"] }
 serde = { workspace = true }
 serde_json = "1.0.117"
+time = { version = "0.3.36", features = ["formatting", "std"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { version = "1.8", features = ["v4", "v7"] }
