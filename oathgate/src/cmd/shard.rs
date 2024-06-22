@@ -18,6 +18,10 @@ use super::draw_table;
 
 #[derive(Debug, Subcommand)]
 pub enum ShardCommand {
+    Create {
+        /// Path to configuration file
+        config: PathBuf,
+    },
     /// Runs a new virtual machine attached to an oathgate bridge
     Run {
         /// Name of the bridge to connect to the shard
@@ -56,6 +60,7 @@ impl ShardCommand {
     /// Executes this cli command
     pub fn execute(self, state: &State) -> anyhow::Result<()> {
         match self {
+            Self::Create { config } => (),
             Self::Run {
                 bridge,
                 name,

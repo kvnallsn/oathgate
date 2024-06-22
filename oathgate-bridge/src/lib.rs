@@ -4,11 +4,12 @@ mod net;
 
 use std::path::{Path, PathBuf};
 
-use config::Config;
 use mio::{
     Events, Interest, Poll, Token,
 };
 use oathgate_vhost::{DeviceOpts, VHostSocket};
+
+pub use self::config::Config as BridgeConfig;
 
 use crate::{
     config::WanConfig,
@@ -33,7 +34,7 @@ pub struct BridgeBuilder {
 pub struct Bridge {
     socket_path: PathBuf,
     pcap: Option<PathBuf>,
-    cfg: Config,
+    cfg: BridgeConfig,
 }
 
 impl BridgeBuilder {
@@ -46,11 +47,10 @@ impl BridgeBuilder {
         self
     }
 
-    pub fn build<P: AsRef<Path>, S: Into<String>>(self, cfg: P, name: S) -> Result<Bridge, Error> {
+    pub fn build<S: Into<String>>(self, cfg: BridgeConfig, name: S) -> Result<Bridge, Error> {
         let name = name.into();
         let socket = format!("/tmp/oathgate/{name}.sock");
 
-        let cfg = Config::load(cfg)?;
         tracing::debug!(?cfg, "bridge configuration");
 
         Ok(Bridge {

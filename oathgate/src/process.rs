@@ -13,6 +13,7 @@ pub enum ProcessState {
     Running,
     PermissionDenied,
     Dead,
+    Stopped,
 }
 
 /// Helper function to prompt for confirmation and, if approved, stop a process
@@ -53,7 +54,8 @@ impl ProcessState {
     pub fn styled(self) -> StyledObject<String> {
         let style = match self {
             Self::Running => Style::new().bold().green(),
-            Self::PermissionDenied | Self::Dead => Style::new().bold().red().dim(),
+            Self::PermissionDenied | Self::Dead => Style::new().red().dim(),
+            Self::Stopped => Style::new().dim(),
         };
 
         style.apply_to(self.to_string())
@@ -66,6 +68,7 @@ impl Display for ProcessState {
             Self::Running => "running",
             Self::PermissionDenied => "permission denied",
             Self::Dead => "dead",
+            Self::Stopped => "stopped",
         };
 
         write!(f, "{msg}")

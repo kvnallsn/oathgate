@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use oathgate_bridge::BridgeBuilder;
+use oathgate_bridge::{BridgeBuilder, BridgeConfig};
 use tracing::Level;
 
 #[derive(Parser)]
@@ -36,9 +36,11 @@ fn main() {
         .with_max_level(level)
         .init();
 
+    let cfg = BridgeConfig::load(&opts.config).unwrap();
+
     if let Err(error) = BridgeBuilder::default()
         .pcap(opts.pcap)
-        .build(opts.config, "oathgate.sock")
+        .build(cfg, "oathgate.sock")
         .and_then(|bridge| bridge.run())
     {
         tracing::error!(?error, "unable to run oathgate-bridge");

@@ -191,9 +191,9 @@ impl AsTable for Shard {
     }
 
     fn as_table_row(&self, widths: &[usize]) {
-        print!(" {:width$} |", self.name, width = widths[0]);
-        print!(" {:width$} |", self.pid, width = widths[1]);
-        print!(" {:width$x} |", self.cid, width = widths[2]);
-        print!(" {:width$} |", self.state.styled(), width = widths[3]);
+        self.print_field(&self.name, widths[0]);
+        self.print_field(&self.pid, widths[1]);
+        self.print_field(&self.cid, widths[2]);
+        self.print_field(&self.state.styled(), widths[3]);
     }
 }

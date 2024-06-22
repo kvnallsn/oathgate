@@ -3,19 +3,15 @@
 pub(crate) mod cmd;
 pub(crate) mod database;
 pub(crate) mod fork;
+pub(crate) mod logger;
 pub(crate) mod process;
 
 use std::path::PathBuf;
 
-use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use cmd::{BridgeCommand, ShardCommand};
-use database::Device;
-use nix::{errno::Errno, unistd::Pid};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
-use uuid::NoContext;
-
-use crate::database::DeviceState;
+use logger::{LogDestination, SubscriberHandle};
+use uuid::{NoContext, Uuid};
 
 use self::database::Database;
 
@@ -69,6 +65,40 @@ pub struct State {
 
     /// Context used to generate unique ids
     ctx: NoContext,
+
+    /// Handle to modify the tracing subscriber
+    handle: SubscriberHandle,
+}
+
+impl Opts {
+    /// Creates the base directory if it does not exist
+    ///
+    /// ### Panics
+    /// - If we cannot create the base directory
+    /// - If the base directory exists but it is not a directory
+    pub fn validate(&mut self) {
+        if !self.base.exists() {
+            std::fs::create_dir_all(&self.base).expect("unable to create base directory");
+        } else if !self.base.is_dir() {
+            panic!("base directory is not a directory");
+        }
+
+        if self.database.is_relative() {
+            self.database = self.base.join(&self.database);
+        }
+
+        //self.database = self.database.canonicalize().expect("unable to canonicalize database file path");
+    }
+
+    /// Returns the maximum log level based on the number of verbose flags
+    pub fn log_level(&self) -> tracing::Level {
+        match self.verbose {
+            0 => tracing::Level::WARN,
+            1 => tracing::Level::INFO,
+            2 => tracing::Level::DEBUG,
+            _ => tracing::Level::TRACE,
+        }
+    }
 }
 
 impl State {
@@ -76,27 +106,15 @@ impl State {
     ///
     /// ### Arguments
     /// * `opts` - Command line options / flags
-    pub fn new(opts: &Opts) -> anyhow::Result<Self> {
-        if opts.base.exists() && !opts.base.is_dir() {
-            tracing::error!(path = %opts.base.display(), "path specified for base directory is not a directory");
-            return Err(anyhow!("invalid base directory"));
-        } else if !opts.base.exists() {
-            tracing::debug!(path = %opts.base.display(), "base directory does not exist, creating");
-            std::fs::create_dir_all(&opts.base)?;
-        }
-
-        let db_path = match opts.database.is_relative() {
-            true => opts.base.join(&opts.database),
-            false => opts.database.clone(),
-        };
-
-        let db = Database::open(&db_path)?;
+    pub fn new(opts: &Opts, handle: SubscriberHandle) -> anyhow::Result<Self> {
+        let db = Database::open(&opts.database)?;
 
         Ok(Self {
             base: opts.base.clone(),
             database: db,
             no_confirm: opts.yes_dont_ask_again,
             ctx: NoContext::default(),
+            handle,
         })
     }
 
@@ -123,6 +141,11 @@ impl State {
         &self.ctx
     }
 
+    /// Returns the tracing subscriber handle
+    pub fn tracing_handle(&self) -> SubscriberHandle {
+        self.handle.clone()
+    }
+
     pub fn hypervisor_dir(&self) -> PathBuf {
         let hvdir = self.base.join("hypervisor");
         if !hvdir.exists() {
@@ -130,53 +153,60 @@ impl State {
         }
         hvdir
     }
-}
 
-fn execute(opts: Opts) -> anyhow::Result<()> {
-    let state = State::new(&opts)?;
-
-    // get all devices and mark those with dead pids as stale
-    let devices = Device::get_all(state.db())?;
-
-    for mut device in devices {
-        match nix::sys::signal::kill(Pid::from_raw(device.pid), None) {
-            Ok(_) => { /* do nothing, valid pid */ }
-            Err(Errno::ESRCH) => {
-                tracing::warn!(device = %device.name, pid = %device.pid, "device: process not found");
-                device.set_state(DeviceState::Stopped);
-                device.save(state.db())?;
-            }
-            Err(Errno::EPERM) => {
-                tracing::warn!(device = %device.name, pid = %device.pid, "device: process permission denied");
-            }
-            Err(errno) => {
-                tracing::warn!(device = %device.name, pid = %device.pid, "unable to check device: {errno}");
-            }
-        }
+    /// Changes the destination of the tracing subscriber to the database
+    ///
+    /// ### Arguments
+    /// * `id` - ID of device we're logging about
+    pub fn log_to_database(&self, id: Uuid) {
+        self.handle.set_destination(LogDestination::Database(id));
     }
 
-    match opts.command {
-        Command::Bridge { command } => command.execute(&state)?,
-        Command::Shard { command } => command.execute(&state)?,
+    /// Set the tracing subscriber to write to stdout
+    pub fn log_to_stdout(&self) {
+        self.handle.set_destination(LogDestination::Stdout);
     }
-
-    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
-    let opts = Opts::parse();
+    let mut opts = Opts::parse();
+    opts.validate();
 
-    let layer = tracing_subscriber::fmt::Layer::default().with_filter(match opts.verbose {
+    /*
+    let filter_layer = tracing_subscriber::fmt::Layer::default().with_filter(match opts.verbose {
         0 => tracing_subscriber::filter::LevelFilter::WARN,
         1 => tracing_subscriber::filter::LevelFilter::INFO,
         2 => tracing_subscriber::filter::LevelFilter::DEBUG,
         _ => tracing_subscriber::filter::LevelFilter::TRACE,
     });
 
-    tracing_subscriber::registry().with(layer).init();
+    tracing_subscriber::registry().with(layer).init(); //.with(logger::SqliteLayer).init();
+    */
 
-    // use with_default here so we can set a global subscriber after forking later
-    execute(opts)?;
+
+    tracing::info!(?opts, "validated options");
+
+    let execute = || {
+        let handle = logger::SqliteSubscriber::builder()
+            .with_max_level(opts.log_level())
+            .init(&opts.database)?;
+
+        let state = State::new(&opts, handle)?;
+
+        match opts.command {
+            Command::Bridge { command } => command.execute(&state)?,
+            Command::Shard { command } => command.execute(&state)?,
+        }
+
+        Ok::<(), anyhow::Error>(())
+    };
+
+    match execute() {
+        Ok(_) => (),
+        Err(error) => {
+            eprintln!("{error}");
+        }
+    }
 
     Ok(())
 }

@@ -3,25 +3,27 @@
 use std::{fmt::Display, path::PathBuf};
 
 use anyhow::Context;
-use console::{Style, StyledObject};
+use console::style;
 use rusqlite::{
     params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
     OptionalExtension, Row, ToSql,
 };
+use serde::{de::DeserializeOwned, Serialize};
 use uuid::{ClockSequence, Timestamp, Uuid};
 
-use crate::{cmd::AsTable, State};
+use crate::{cmd::AsTable, process::{self, ProcessState}, State};
 
 use super::Database;
 
 #[derive(Debug)]
 pub struct Device {
-    pub id: Uuid,
-    pub pid: i32,
-    pub name: String,
-    pub ty: DeviceType,
-    pub state: DeviceState,
+    id: Uuid,
+    pid: Option<i32>,
+    name: String,
+    ty: DeviceType,
+    cfg: serde_json::Value,
+    state: ProcessState,
 }
 
 #[derive(Debug)]
@@ -29,22 +31,15 @@ pub enum DeviceType {
     Bridge,
 }
 
-#[derive(Debug)]
-pub enum DeviceState {
-    Created,
-    Running,
-    Stopped,
-}
-
 impl Device {
     /// Returns a string representing the table's schema
     pub fn table() -> &'static str {
         "CREATE TABLE IF NOT EXISTS devices (
             id      BLOB PRIMARY KEY,
-            pid     INTEGER NOT NULL,
+            pid     INTEGER,
             name    TEXT NOT NULL,
             device  INTEGER NOT NULL,
-            state   INTEGER NOT NULL
+            config  JSON NOT NULL
         )"
     }
     /// Creates a new device from the provided parameters
@@ -54,20 +49,22 @@ impl Device {
     /// * `pid` - Process Id of running process
     /// * `name` - Name of this device
     /// * `ty` - Type of device
-    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>>(
+    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>, V: Serialize>(
         ctx: C,
-        pid: i32,
         name: S,
         ty: DeviceType,
+        config: &V,
     ) -> Self {
         let id = Uuid::new_v7(Timestamp::now(&ctx));
+        let cfg = serde_json::to_value(config).unwrap();
 
         Self {
             id,
-            pid,
+            pid: None,
             name: name.into(),
             ty,
-            state: DeviceState::Running,
+            cfg,
+            state: ProcessState::Stopped
         }
     }
 
@@ -76,16 +73,16 @@ impl Device {
         db.transaction(|conn| {
             conn.execute(
                 "INSERT INTO
-                    devices (id, pid, name, device, state)
+                    devices (id, pid, name, device, config)
                  VALUES
                     (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(id) DO UPDATE SET
                     pid = excluded.pid,
                     name = excluded.name,
                     device = excluded.device,
-                    state = excluded.state
+                    config = excluded.config
                 ",
-                (&self.id, self.pid, &self.name, &self.ty, &self.state),
+                (&self.id, self.pid, &self.name, &self.ty, &self.cfg),
             )?;
 
             Ok(())
@@ -105,7 +102,7 @@ impl Device {
 
         let device = db.transaction(|conn| {
             let mut stmt =
-                conn.prepare("SELECT id, pid, name, device, state FROM devices where name = ?1")?;
+                conn.prepare("SELECT id, pid, name, device, config FROM devices where name = ?1")?;
 
             let device = stmt.query_row(params![name], Self::from_row).optional()?;
 
@@ -121,7 +118,7 @@ impl Device {
     /// * `db` - Reference to the database
     pub fn get_all(db: &Database) -> anyhow::Result<Vec<Device>> {
         let devices = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, pid, name, device, state FROM devices")?;
+            let mut stmt = conn.prepare("SELECT id, pid, name, device, config FROM devices")?;
 
             let devices = stmt
                 .query_map(params![], Self::from_row)?
@@ -146,17 +143,25 @@ impl Device {
         Ok(())
     }
 
-    /// Updates the state on this device
-    ///
-    /// ### Arguments
-    /// * `state` - New value of the state field
-    pub fn set_state(&mut self, state: DeviceState) {
-        self.state = state;
+    /// Returns the unique id of this device
+    pub fn id(&self) -> Uuid {
+        self.id
     }
 
-    /// Returns true if this device is running (defined by having a valid pid)
-    pub fn is_running(&self) -> bool {
-        matches!(self.state, DeviceState::Running)
+    /// Sets the pid associated with this device
+    pub fn set_pid(&mut self, pid: i32) {
+        self.pid = Some(pid);
+    }
+
+    /// Clears the pid associated with this device
+    pub fn clear_pid(&mut self) {
+        self.pid = None;
+    }
+
+
+    /// Returns the pid associated with the process, if it is running
+    pub fn pid(&self) -> Option<i32> {
+        self.pid
     }
 
     /// Returns the path to the unix domain socket connected to this process
@@ -164,17 +169,30 @@ impl Device {
         state.base.join(&self.name).with_extension("sock")
     }
 
+    /// Returns the configuration object stored in this device entry
+    pub fn config<D: DeserializeOwned>(&self) -> anyhow::Result<D> {
+        Ok(serde_json::from_value(self.cfg.clone())?)
+    }
+
     /// Parses a Device from a sqlite row
     ///
     /// ### Arguments
     /// * `row` - Row returned from database
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let pid: Option<i32> = row.get(1)?;
+        let state = match pid {
+            Some(pid) => process::check(pid).unwrap_or(ProcessState::Dead),
+            None => ProcessState::Stopped,
+        };
+        let cfg: serde_json::Value = row.get(4)?;
+
         Ok(Device {
             id: row.get(0)?,
-            pid: row.get(1)?,
+            pid,
             name: row.get(2)?,
             ty: row.get(3)?,
-            state: row.get(4)?,
+            cfg,
+            state
         })
     }
 }
@@ -186,18 +204,6 @@ impl Display for DeviceType {
         };
 
         write!(f, "{name}")
-    }
-}
-
-impl Display for DeviceState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = match self {
-            Self::Created => "created",
-            Self::Running => "running",
-            Self::Stopped => "stopped",
-        };
-
-        write!(f, "{state}")
     }
 }
 
@@ -213,49 +219,11 @@ impl FromSql for DeviceType {
     }
 }
 
-impl FromSql for DeviceState {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value {
-            ValueRef::Integer(i) => match i {
-                0 => Ok(DeviceState::Created),
-                1 => Ok(DeviceState::Running),
-                2 => Ok(DeviceState::Stopped),
-                _ => Err(FromSqlError::Other(
-                    "invalid number for device state".into(),
-                )),
-            },
-            _ => Err(FromSqlError::InvalidType),
-        }
-    }
-}
-
 impl ToSql for DeviceType {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         match self {
             Self::Bridge => Ok(ToSqlOutput::Owned(rusqlite::types::Value::Integer(0))),
         }
-    }
-}
-
-impl ToSql for DeviceState {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        match self {
-            Self::Created => Ok(ToSqlOutput::Owned(rusqlite::types::Value::Integer(0))),
-            Self::Running => Ok(ToSqlOutput::Owned(rusqlite::types::Value::Integer(1))),
-            Self::Stopped => Ok(ToSqlOutput::Owned(rusqlite::types::Value::Integer(2))),
-        }
-    }
-}
-
-impl DeviceState {
-    fn styled(&self) -> StyledObject<String> {
-        let style = match self {
-            Self::Created => Style::new(),
-            Self::Stopped => Style::new().bold().red(),
-            Self::Running => Style::new().bold().green(),
-        };
-
-        style.apply_to(self.to_string())
     }
 }
 
@@ -266,15 +234,23 @@ impl AsTable for Device {
 
     fn update_col_width(&self, widths: &mut [usize]) {
         widths[0] = std::cmp::max(widths[0], self.name.len());
-        widths[1] = std::cmp::max(widths[1], self.pid.to_string().len());
+        widths[1] = match self.pid.as_ref() {
+            Some(pid) => std::cmp::max(widths[1], pid.to_string().len()),
+            None => "None".len(),
+        };
         widths[2] = std::cmp::max(widths[2], self.ty.to_string().len());
         widths[3] = std::cmp::max(widths[3], self.state.to_string().len());
     }
 
     fn as_table_row(&self, widths: &[usize]) {
-        print!(" {:width$} |", self.name, width = widths[0]);
-        print!(" {:width$} |", self.pid, width = widths[1]);
-        print!(" {:width$} |", self.ty, width = widths[2]);
-        print!(" {:width$} |", self.state.styled(), width = widths[3]);
+        self.print_field(&self.name, widths[0]);
+
+        match self.pid.as_ref() {
+            Some(pid) => self.print_field(pid, widths[1]),
+            None => self.print_field(style("None").dim(), widths[1]),
+        }
+
+        self.print_field(&self.ty, widths[2]);
+        self.print_field(self.state.styled(), widths[3]);
     }
 }

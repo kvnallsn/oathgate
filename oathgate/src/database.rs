@@ -1,6 +1,7 @@
 //! Database related functions
 
 pub(crate) mod device;
+pub(crate) mod log;
 pub(crate) mod shard;
 
 use std::{path::Path, sync::Arc};
@@ -9,9 +10,9 @@ use anyhow::Context;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-use crate::database::shard::Shard;
+use crate::database::{log::LogEntry, shard::Shard};
 
-pub use self::device::{Device, DeviceState, DeviceType};
+pub use self::device::{Device, DeviceType};
 
 /// Provides access to the database used to track bridges, etc.
 ///
@@ -32,9 +33,14 @@ impl Database {
         tracing::debug!("opening database at path {}", path.as_ref().display());
 
         let conn = Connection::open(path)?;
-        let db = Self { conn: Arc::new(Mutex::new(conn)) };
+        let db = Self {
+            conn: Arc::new(Mutex::new(conn)),
+        };
 
         db.transaction(|conn| {
+            conn.execute(LogEntry::table(), ())
+                .context("unable to create log table")?;
+
             conn.execute(Device::table(), ())
                 .context("unable to create device table")?;
 
@@ -43,7 +49,6 @@ impl Database {
 
             Ok(())
         })?;
-
 
         Ok(db)
     }

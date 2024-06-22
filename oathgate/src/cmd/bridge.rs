@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context};
 use clap::Subcommand;
 use dialoguer::Confirm;
-use oathgate_bridge::BridgeBuilder;
+use oathgate_bridge::{BridgeBuilder, BridgeConfig};
 
-use crate::{database::{Device, DeviceType}, fork::Forker, State, process};
+use crate::{database::{log::LogEntry, Device, DeviceType}, fork::Forker, State, process};
 
 #[derive(Debug, Subcommand)]
 pub enum BridgeCommand {
@@ -16,13 +16,19 @@ pub enum BridgeCommand {
         /// Path to bridge configuration file
         config: PathBuf,
 
+        /// Name to identify this bridge, or omitted to auto-generate
+        #[clap(short, long)]
+        name: Option<String>,
+    },
+
+    /// Starts a bridge, spawning a new process/daemon
+    Start {
         /// Path to pcap file, or omit to disable pcap
         #[clap(short, long)]
         pcap: Option<PathBuf>,
 
-        /// Name to identify this bridge, or omitted to generate one
-        #[clap(short, long)]
-        name: Option<String>,
+        /// Name of bridge to start
+        name: String,
     },
 
     /// Returns a list of all bridges, including inactive ones
@@ -39,20 +45,41 @@ pub enum BridgeCommand {
         /// Name of bridge to stop
         name: String,
     },
+
+    /// Delete an existing oathgate bridge
+    Delete{
+        /// Name of bridge to delete
+        name: String,
+    },
 }
 
 impl BridgeCommand {
     /// Executes the command contained in this instance of the enum
     pub fn execute(self, state: &State) -> anyhow::Result<()> {
         match self {
-            Self::Create { config, pcap, name } => create_bridge(state, config, name, pcap)?,
+            Self::Create { config, name } => create_bridge(state, config, name)?,
+            Self::Start { pcap, name } => start_bridge(state, name, pcap)?,
             Self::List => list_bridges(state)?,
             Self::Logs { name } => print_logs(state, name)?,
             Self::Stop { name } => stop_bridge(state, name)?,
+            Self::Delete { name } => delete_bridge(state, name)?,
         }
 
         Ok(())
     }
+}
+
+
+/// Returns the bridge with the specified name. Returns an error if a bridge with the specified
+/// name is not found.
+///
+/// ### Arguments
+/// * `state` - Application state
+/// * `name` - Name of bridge to get / find
+fn get_bridge(state: &State, name: &str) -> anyhow::Result<Device> {
+    let device = Device::get(state.db(), &name)?.ok_or_else(|| anyhow!("device '{name}' not found"))?;
+    tracing::info!(bridge = %name, "found bridge");
+    Ok(device)
 }
 
 /// Creates a new bridge
@@ -61,12 +88,11 @@ impl BridgeCommand {
 /// * `state` - Application state
 /// * `config` - Path to bridge configuration file
 /// * `name` - Name of bridge (or None to generate one)
-/// * `pcap` - Path to file to save pcap (or None to disable pcap)
+/// * `start` - Starts the bridge after it is created
 fn create_bridge(
     state: &State,
     config: PathBuf,
     name: Option<String>,
-    pcap: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let name = name
         .or_else(|| {
@@ -76,10 +102,32 @@ fn create_bridge(
         .ok_or_else(|| anyhow!("unable to generate name for device, please provide one"))?;
 
     tracing::info!(
-        name,
+        bridge = %name,
         "creating new bridge from configuration file '{}'",
         config.display()
     );
+
+    let cfg = BridgeConfig::load(&config)?;
+    let device = Device::new(state.ctx(), &name, DeviceType::Bridge, &cfg);
+    device.save(state.db())?;
+
+    tracing::info!(bridge = %name, "successfully created bridge");
+
+    Ok(())
+}
+
+/// Starts running an oathgate bridge, spawning a new process to handle the traffic
+///
+/// ### Arguments
+/// * `state` - Application state
+/// * `config` - Path to bridge configuration file
+/// * `name` - Name of bridge (or None to generate one)
+/// * `pcap` - Path to file to save pcap (or None to disable pcap)
+fn start_bridge(state: &State, name: String, pcap: Option<PathBuf>) -> anyhow::Result<()> {
+    let mut device = get_bridge(state, &name)?;
+    state.log_to_database(device.id());
+
+    let config: BridgeConfig = device.config()?;
 
     let stdout = state.base.join(&name).with_extension("log");
 
@@ -89,15 +137,12 @@ fn create_bridge(
         Ok(())
     })?;
 
-    let device = Device::new(state.ctx(), pid.as_raw(), &name, DeviceType::Bridge);
+
+    device.set_pid(pid.as_raw());
     device.save(state.db()).context("unable to save device in database")?;
 
-
-    tracing::debug!(
-        name,
-        "inserted device into bridge with id '{}'",
-        device.id.as_hyphenated()
-    );
+    tracing::info!(bridge = %name, %pid, "started bridge");
+    state.log_to_stdout();
 
     Ok(())
 }
@@ -108,32 +153,22 @@ fn create_bridge(
 /// * `state` - Application state
 /// * `name` - Name of bridge to stop 
 fn stop_bridge(state: &State, name: String) -> anyhow::Result<()> {
-    // get device
-    let device = Device::get(state.db(), &name)?.ok_or_else(|| anyhow!("device '{name}' not found"))?;
-    tracing::trace!(?device, "found device");
+    let mut device = get_bridge(state, &name)?;
+    state.log_to_database(device.id());
 
-    if device.is_running() {
-        match process::stop(state, device.pid, "Delete device?")? {
+    match device.pid() {
+        Some(pid) => match process::stop(state, pid, "Stop device?")? {
             true => {
-                device.delete(state.db())?;
-                println!("deleted device");
+                device.clear_pid();
+                device.save(state.db())?;
+                println!("stopped device");
             }
             false => println!("operation cancelled"),
-        }
-    } else {
-        println!(
-            "found device but associated process ({}) is missing",
-            device.pid
-        );
-
-        let confirmation =
-            state.skip_confirm() || Confirm::new().with_prompt("Delete device?").interact()?;
-
-        if confirmation {
-            device.delete(state.db())?;
-            println!("device stopped");
-        }
+        },
+        None => println!("device not running"),
     }
+    state.log_to_stdout();
+
     Ok(())
 }
 
@@ -147,9 +182,47 @@ fn list_bridges(state: &State) -> anyhow::Result<()> {
 }
 
 fn print_logs(state: &State, name: String) -> anyhow::Result<()> {
-    match Device::get(state.db(), &name)? {
-        None => println!("bridge not found"),
-        Some(dev) => (),
+    let device = get_bridge(state, &name)?;
+    let logs = LogEntry::get(state.db(), device.id())?;
+
+    for log in logs {
+        log.display();
     }
+
+    Ok(())
+}
+
+/// Deletes a bridge, stopping it if it is running
+///
+/// ### Arguments
+/// * `state` - Application state
+/// * `name` - Name of bridge to delete
+fn delete_bridge(state: &State, name: String) -> anyhow::Result<()> {
+    let mut device = get_bridge(state, &name)?;
+
+    match device.pid() {
+        Some(pid) => match process::stop(state, pid, "Stop device?")? {
+            true => {
+                device.clear_pid();
+                device.save(state.db())?;
+                println!("stopped device");
+            }
+            false => {
+                println!("operation cancelled");
+                return Ok(());
+            }
+        },
+        None => (),
+    }
+
+    let confirmation = state.skip_confirm() || Confirm::new().with_prompt("Delete device?").interact()?;
+
+    if confirmation {
+        device.delete(state.db())?;
+        println!("delete device");
+    } else {
+        println!("operation cancelled");
+    }
+
     Ok(())
 }

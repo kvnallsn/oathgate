@@ -3,6 +3,8 @@
 mod bridge;
 mod shard;
 
+use std::fmt::Display;
+
 pub use self::{bridge::BridgeCommand, shard::ShardCommand};
 
 /// Instructions on how to render a struct as a row in an ascii table
@@ -10,6 +12,10 @@ pub trait AsTable {
     fn header() -> &'static [&'static str];
     fn update_col_width(&self, widths: &mut [usize]);
     fn as_table_row(&self, widths: &[usize]);
+
+    fn print_field<D: Display>(&self, field: D, width: usize) {
+        print!(" {:width$} \u{2502}", field, width = width);
+    }
 }
 
 /// Draws an ascii-render table to stdout
@@ -25,28 +31,47 @@ pub fn draw_table<T: AsTable>(rows: &[T]) {
         row.update_col_width(&mut col_widths);
     }
 
-    let draw_separator = || {
+    let pipe = "\u{2502}";
+
+    let draw_separator = |line: &str| {
+        let (l, m, e) = match line {
+            "first" => ("\u{250c}", "\u{252c}", "\u{2510}"),
+            "last" => ("\u{2514}", "\u{2534}", "\u{2518}"),
+            _ => ("\u{251c}", "\u{253c}", "\u{2524}"),
+        };
+
+        let mut first = true;
+
         for &width in &col_widths {
-            print!("+{}", "-".repeat(width + 2));
+            let sep = match first {
+                true => {
+                    first = false;
+                    l
+                }
+                false => m,
+            };
+
+            print!("{sep}{}", "\u{2500}".repeat(width + 2));
         }
-        println!("+");
+        println!("{e}");
     };
 
-    draw_separator();
-    print!("|");
+
+    draw_separator("first");
+    print!("{pipe}");
     for (i, header) in T::header().iter().enumerate() {
-        print!(" {:width$} |", header, width = col_widths[i]);
+        print!(" {:width$} {pipe}", header, width = col_widths[i]);
     }
     println!();
-    draw_separator();
+    draw_separator("middle");
 
     for row in rows {
-        print!("|");
+        print!("{pipe}");
         row.as_table_row(&col_widths);
         println!();
     }
 
-    draw_separator();
+    draw_separator("last");
 
     term.flush().ok();
 }
