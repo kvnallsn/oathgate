@@ -4,7 +4,10 @@ use anyhow::Context;
 use rusqlite::{params, OptionalExtension, Row};
 use uuid::{ClockSequence, Timestamp, Uuid};
 
-use crate::{cmd::AsTable, process::{self, ProcessState}};
+use crate::{
+    cmd::AsTable,
+    process::{self, ProcessState},
+};
 
 use super::Database;
 
@@ -48,7 +51,12 @@ impl Shard {
     /// * `pid` - Process Id of running shard
     /// * `cid` - Context Id used with vhost-vsock
     /// * `name` - Name of this shard
-    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>>(ctx: C, pid: i32, cid: u32, name: S) -> Self {
+    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>>(
+        ctx: C,
+        pid: i32,
+        cid: u32,
+        name: S,
+    ) -> Self {
         let id = Uuid::new_v7(Timestamp::now(&ctx));
 
         Self {
@@ -56,7 +64,7 @@ impl Shard {
             pid,
             cid,
             name: name.into(),
-            state: ProcessState::Running,
+            state: ProcessState::Stopped,
         }
     }
 
@@ -91,12 +99,9 @@ impl Shard {
     /// * `name` - Name of the shard
     pub fn get(db: &Database, name: &str) -> anyhow::Result<Option<Shard>> {
         let shard = db.transaction(|conn| {
-            let mut stmt = 
-                conn
-                .prepare("SELECT id, name, pid, cid FROM shards WHERE name = ?1")?;
+            let mut stmt = conn.prepare("SELECT id, name, pid, cid FROM shards WHERE name = ?1")?;
 
-            let shard = stmt
-                .query_row(params![name], Self::from_row).optional()?;
+            let shard = stmt.query_row(params![name], Self::from_row).optional()?;
 
             Ok(shard)
         })?;
@@ -110,13 +115,10 @@ impl Shard {
     /// * `db` - Reference to the database
     pub fn get_all(db: &Database) -> anyhow::Result<Vec<Shard>> {
         let shards = db.transaction(|conn| {
-            let mut stmt = 
-                conn
-                .prepare("SELECT id, name, pid, cid FROM shards")?;
+            let mut stmt = conn.prepare("SELECT id, name, pid, cid FROM shards")?;
 
             let shards = stmt
                 .query_map(params![], Self::from_row)?
-                .inspect(|f| tracing::trace!(row = ?f, "row result"))
                 .filter_map(|dev| dev.ok())
                 .collect::<Vec<_>>();
 
@@ -166,7 +168,7 @@ impl Shard {
         let pid: i32 = row.get(2)?;
         let state = process::check(pid).unwrap();
 
-        Ok(Self{
+        Ok(Self {
             id: row.get(0)?,
             name: row.get(1)?,
             pid,

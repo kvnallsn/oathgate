@@ -10,16 +10,20 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use cmd::{BridgeCommand, ShardCommand};
-use logger::{LogDestination, SubscriberHandle};
+use logger::SqliteSubscriber;
 use uuid::{NoContext, Uuid};
 
 use self::database::Database;
 
 #[derive(Debug, Parser)]
 pub struct Opts {
-    /// Verbosity of logging (-v, -vv, -vvv)
+    /// Log level verbosity (-v, -vv, -vvv)
     #[clap(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
+
+    /// Don't log to stdout
+    #[clap(short, long, global = true)]
+    pub silent: bool,
 
     /// Path to base directory to store application files
     #[clap(short, long, default_value = "/tmp/oathgate")]
@@ -66,8 +70,8 @@ pub struct State {
     /// Context used to generate unique ids
     ctx: NoContext,
 
-    /// Handle to modify the tracing subscriber
-    handle: SubscriberHandle,
+    /// Maximum level to log at
+    max_log_level: tracing::Level,
 }
 
 impl Opts {
@@ -86,18 +90,6 @@ impl Opts {
         if self.database.is_relative() {
             self.database = self.base.join(&self.database);
         }
-
-        //self.database = self.database.canonicalize().expect("unable to canonicalize database file path");
-    }
-
-    /// Returns the maximum log level based on the number of verbose flags
-    pub fn log_level(&self) -> tracing::Level {
-        match self.verbose {
-            0 => tracing::Level::WARN,
-            1 => tracing::Level::INFO,
-            2 => tracing::Level::DEBUG,
-            _ => tracing::Level::TRACE,
-        }
     }
 }
 
@@ -106,24 +98,31 @@ impl State {
     ///
     /// ### Arguments
     /// * `opts` - Command line options / flags
-    pub fn new(opts: &Opts, handle: SubscriberHandle) -> anyhow::Result<Self> {
+    pub fn new(opts: &Opts) -> anyhow::Result<Self> {
         let db = Database::open(&opts.database)?;
+
+        let max_log_level = match opts.verbose {
+            0 => tracing::Level::WARN,
+            1 => tracing::Level::INFO,
+            2 => tracing::Level::DEBUG,
+            _ => tracing::Level::TRACE,
+        };
 
         Ok(Self {
             base: opts.base.clone(),
             database: db,
             no_confirm: opts.yes_dont_ask_again,
             ctx: NoContext::default(),
-            handle,
+            max_log_level,
         })
     }
 
-    /// Returns the full path the log file
-    ///
-    /// ### Arguments
-    /// * `name` - Name of this device
-    pub fn log_file(&self, name: &str) -> PathBuf {
-        self.base.join(name).with_extension("log")
+    /// Returns the tracing subscriber that will be installed in child process when forked
+    pub fn subscriber(&self, device_id: Uuid) -> anyhow::Result<SqliteSubscriber> {
+        SqliteSubscriber::builder()
+            .with_max_level(self.max_log_level)
+            .with_device_id(device_id)
+            .finish(self.database.path())
     }
 
     /// Returns a reference to a database connection
@@ -141,11 +140,6 @@ impl State {
         &self.ctx
     }
 
-    /// Returns the tracing subscriber handle
-    pub fn tracing_handle(&self) -> SubscriberHandle {
-        self.handle.clone()
-    }
-
     pub fn hypervisor_dir(&self) -> PathBuf {
         let hvdir = self.base.join("hypervisor");
         if !hvdir.exists() {
@@ -153,45 +147,14 @@ impl State {
         }
         hvdir
     }
-
-    /// Changes the destination of the tracing subscriber to the database
-    ///
-    /// ### Arguments
-    /// * `id` - ID of device we're logging about
-    pub fn log_to_database(&self, id: Uuid) {
-        self.handle.set_destination(LogDestination::Database(id));
-    }
-
-    /// Set the tracing subscriber to write to stdout
-    pub fn log_to_stdout(&self) {
-        self.handle.set_destination(LogDestination::Stdout);
-    }
 }
 
 fn main() -> anyhow::Result<()> {
     let mut opts = Opts::parse();
     opts.validate();
 
-    /*
-    let filter_layer = tracing_subscriber::fmt::Layer::default().with_filter(match opts.verbose {
-        0 => tracing_subscriber::filter::LevelFilter::WARN,
-        1 => tracing_subscriber::filter::LevelFilter::INFO,
-        2 => tracing_subscriber::filter::LevelFilter::DEBUG,
-        _ => tracing_subscriber::filter::LevelFilter::TRACE,
-    });
-
-    tracing_subscriber::registry().with(layer).init(); //.with(logger::SqliteLayer).init();
-    */
-
-
-    tracing::info!(?opts, "validated options");
-
     let execute = || {
-        let handle = logger::SqliteSubscriber::builder()
-            .with_max_level(opts.log_level())
-            .init(&opts.database)?;
-
-        let state = State::new(&opts, handle)?;
+        let state = State::new(&opts)?;
 
         match opts.command {
             Command::Bridge { command } => command.execute(&state)?,

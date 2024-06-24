@@ -18,7 +18,7 @@ parking_lot = { workspace = true }
 rusqlite = { version = "0.31.0", features = ["serde_json", "time", "uuid"] }
 serde = { workspace = true }
 serde_json = "1.0.117"
-time = { version = "0.3.36", features = ["formatting", "std"] }
+time = { version = "0.3.36", features = ["formatting", "serde", "std"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { version = "1.8", features = ["v4", "v7"] }

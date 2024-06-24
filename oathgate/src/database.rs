@@ -4,7 +4,7 @@ pub(crate) mod device;
 pub(crate) mod log;
 pub(crate) mod shard;
 
-use std::{path::Path, sync::Arc};
+use std::{path::{Path, PathBuf}, sync::Arc};
 
 use anyhow::Context;
 use parking_lot::Mutex;
@@ -22,6 +22,7 @@ pub use self::device::{Device, DeviceType};
 /// device.
 pub struct Database {
     conn: Arc<Mutex<Connection>>,
+    path: PathBuf,
 }
 
 impl Database {
@@ -30,11 +31,12 @@ impl Database {
     /// ### Arguments
     /// * `path` - Location on file system for database
     pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        tracing::debug!("opening database at path {}", path.as_ref().display());
+        let path = path.as_ref();
 
         let conn = Connection::open(path)?;
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
+            path: path.to_path_buf(),
         };
 
         db.transaction(|conn| {
@@ -70,5 +72,10 @@ impl Database {
                 Err(err)
             }
         }
+    }
+
+    /// Returns the path to this database on disk
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
     }
 }

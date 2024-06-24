@@ -87,13 +87,9 @@ fn run_socket(sock: RawFd) -> anyhow::Result<()> {
                 TOKEN_SOCKET if event.is_readable() => 'socket: loop {
                     let sz = match socket::recv(sock, &mut buf, MsgFlags::MSG_DONTWAIT) {
                         Ok(0) => {
-                            tracing::info!("read 0 bytes, quitting");
                             break 'poll;
                         }
-                        Ok(sz) => {
-                            tracing::trace!("read {sz} bytes from socket");
-                            sz
-                        }
+                        Ok(sz) => sz,
                         Err(Errno::EWOULDBLOCK) => break 'socket,
                         Err(errno) => Err(errno).context("unable to receive data")?,
                     };
@@ -107,10 +103,9 @@ fn run_socket(sock: RawFd) -> anyhow::Result<()> {
                         .context("unable to flush stdout stream")?;
                 },
                 TOKEN_SOCKET => {
-                    tracing::warn!("got unknown event on vhost socket");
                     break 'poll;
                 }
-                Token(token) => tracing::debug!(%token, "unknown mio token"),
+                Token(_token) => { /* unknown token id, ignore */ }
             }
         }
     }
@@ -118,14 +113,11 @@ fn run_socket(sock: RawFd) -> anyhow::Result<()> {
     nix::sys::socket::shutdown(sock, socket::Shutdown::Both)
         .context("unable to shutdown socket")?;
 
-    tracing::info!("client closed connection");
     Ok(())
 }
 
 fn resize_pty(sock: RawFd, rows: u16, cols: u16, bytes: &mut [u8]) -> anyhow::Result<()> {
     use nix::sys::socket;
-
-    tracing::debug!("resizing terminal to {rows}x{cols}");
 
     bytes[0] = 0x02;
     bytes[1..3].copy_from_slice(&rows.to_le_bytes());
@@ -149,12 +141,11 @@ fn run_ui(sock: RawFd) -> anyhow::Result<()> {
         .and_then(|(cols, rows)| resize_pty(sock, rows, cols, &mut bytes))
         .context("resize_pty error")
     {
-        tracing::warn!(?error, "unable to resize terminal");
+        // TODO: notify term failed to resize
     }
 
     loop {
         let ev = crossterm::event::read()?;
-        tracing::trace!("got event: {ev:?}");
 
         match ev {
             Event::Key(ev) => {
@@ -204,7 +195,6 @@ fn run_ui(sock: RawFd) -> anyhow::Result<()> {
                     bytes[2] = szb[1];
 
                     let sz = socket::send(sock, &bytes[0..(sz + 3)], MsgFlags::MSG_DONTWAIT)?;
-                    tracing::trace!("wrote {sz} bytes to vhost socket");
                 }
             }
             Event::Resize(cols, rows) => resize_pty(sock, rows, cols, &mut bytes)?,
@@ -225,8 +215,8 @@ pub fn run(cid: u32, port: u32) -> anyhow::Result<()> {
                 .and_then(|_| run_ui(sfd))
                 .context("failed to run ui event loop");
 
-            if let Err(error) = res {
-                tracing::error!(%error, "ui thread died");
+            if let Err(_error) = res {
+                // TODO: handle error (ui thread dead)
             }
 
             terminal::disable_raw_mode().ok();

@@ -1,23 +1,22 @@
 //! Help utility to fork process
 
-use std::{fs::File, os::fd::AsRawFd, path::PathBuf};
-
 use nix::unistd::{ForkResult, Pid};
+use tracing::Subscriber;
+
 
 /// Configures settings & parameters to use in the newly-forked process
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Forker {
-    stdout: Option<PathBuf>,
+    subscriber: Option<Box<dyn Subscriber + Send + Sync + 'static>>,
 }
 
 impl Forker {
-    /// Set the filepath to contain stdout logs
+    /// Intalls the specified subscriber as tracing's global default for the spawned process
     ///
     /// ### Arguments
-    /// * `path` - Path to location to save standard output
-    pub fn stdout<P: Into<PathBuf>>(mut self, path: P) -> Self {
-        self.stdout = Some(path.into());
-        self
+    /// * `subscriber` - Tracing subscriber that will catch the emitted events
+    pub fn with_subscriber<S: Subscriber + Send + Sync + 'static>(subscriber: S) -> Self {
+        Self { subscriber: Some(Box::new(subscriber)) }
     }
 
     /// Execute the fork, returning the PID of the newly spawned child process
@@ -27,6 +26,7 @@ impl Forker {
     pub fn fork<F: FnOnce() -> anyhow::Result<()>>(self, f: F) -> anyhow::Result<Pid> {
         match unsafe { nix::unistd::fork()? } {
             ForkResult::Child => {
+                /*
                 if let Some(stdout) = self.stdout {
                     if let Err(error) = File::options()
                         .append(true)
@@ -37,14 +37,19 @@ impl Forker {
                             nix::unistd::dup2(fd.as_raw_fd(), nix::libc::STDOUT_FILENO)
                                 .map_err(anyhow::Error::from)
                         }) {
-                        tracing::warn!(%error, "unable to redirect stdout to file");
+                        // unable to redirect stdout
                     }
+                }
+                */
+
+                if let Some(subscriber) = self.subscriber {
+                    tracing::subscriber::set_global_default(subscriber).ok();
                 }
 
                 match f() {
                     Ok(_) => std::process::exit(0),
                     Err(error) => {
-                        tracing::error!(%error, "operation failed");
+                        eprintln!("failed to fork: {error}");
                         std::process::exit(-1);
                     }
                 }

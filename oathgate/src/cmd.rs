@@ -5,7 +5,42 @@ mod shard;
 
 use std::fmt::Display;
 
+use clap::{Args, ValueEnum};
+
+use crate::logger::LogLevel;
+
 pub use self::{bridge::BridgeCommand, shard::ShardCommand};
+
+#[derive(Args, Debug)]
+pub struct LogSettings {
+    /// Format to save logs
+    #[clap(long)]
+    pub log_format: LogFormat,
+
+    /// Verbosity of spawned/detached process
+    #[clap(long)]
+    pub log_level: LogLevel,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum LogFormat {
+    /// Pretty print logs (for human consumption)
+    Pretty,
+
+    /// Output as json (for machine consumption)
+    Json,
+}
+
+impl Display for LogFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Self::Pretty => "pretty",
+            Self::Json => "json",
+        };
+
+        write!(f, "{str}")
+    }
+}
 
 /// Instructions on how to render a struct as a row in an ascii table
 pub trait AsTable {

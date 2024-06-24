@@ -94,11 +94,10 @@ fn run_shard(
     let cfg = Config::from_yaml(config)?;
     let mut hv = Hypervisor::new(bridge.uds(state), name, cfg.machine)?;
 
-    let log = state.hypervisor_dir().join("shard.log");
-
+    let logger = state.subscriber(bridge.id())?;
     let name = hv.name().to_owned();
     let cid = hv.cid();
-    let pid = Forker::default().stdout(log).fork(move || {
+    let pid = Forker::with_subscriber(logger).fork(move || {
         hv.run()?;
         Ok(())
     })?;
@@ -123,16 +122,13 @@ fn list_shards(state: &State) -> anyhow::Result<()> {
 fn stop_shard(state: &State, name: String) -> anyhow::Result<()> {
     match Shard::get(state.db(), &name)? {
         None => println!("shard '{name}' not found!"),
-        Some(shard) => {
-            tracing::debug!(?shard, "stopping shard");
-            match process::stop(state, shard.pid(), "Stop shard?")? {
-                true => {
-                    shard.delete(state.db())?;
-                    println!("shard stopped");
-                }
-                false => println!("operation cancelled"),
+        Some(shard) => match process::stop(state, shard.pid(), "Stop shard?")? {
+            true => {
+                shard.delete(state.db())?;
+                println!("shard stopped");
             }
-        }
+            false => println!("operation cancelled"),
+        },
     }
     Ok(())
 }

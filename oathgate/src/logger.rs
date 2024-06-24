@@ -1,48 +1,51 @@
 //! A database logger
 
-use std::{borrow::Cow, collections::BTreeMap, fmt::Display, path::Path, sync::{atomic::{AtomicU64, Ordering}, Arc}};
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    fmt::Display,
+    path::Path,
+    str::FromStr,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
+use anyhow::anyhow;
+use clap::ValueEnum;
 use console::Style;
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use time::{OffsetDateTime, format_description::well_known::Rfc2822};
+use time::{format_description::well_known::Rfc2822, OffsetDateTime};
 use tracing::{span, Level, Metadata};
 use uuid::Uuid;
 
 use crate::database::{log::LogEntry, Database};
 
-/// Where to save logs
-pub enum LogDestination {
-    Stdout,
-
-    /// Save to the database and associate with specific uuid
-    Database(Uuid),
-}
-
-/// A handle to settings that can be modified
-#[derive(Clone)]
-pub struct SubscriberHandle {
-    dest: Arc<RwLock<LogDestination>>,
-}
-
 pub struct SqliteSubscriber {
     db: Database,
     max_level: Level,
     next_id: AtomicU64,
-    dest: Arc<RwLock<LogDestination>>,
+    device_id: Uuid,
 }
 
 pub struct SqliteSubscriberBuilder {
     max_level: Level,
-    dest: LogDestination,
+    device_id: Option<Uuid>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, ValueEnum)]
+pub enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+#[derive(Debug, Serialize)]
 pub struct OathgateEvent<'a> {
     pub target: Cow<'a, str>,
     pub line: Option<u32>,
     pub module: Option<Cow<'a, str>>,
-    pub level: Level,
+    pub level: LogLevel,
     pub data: BTreeMap<Cow<'a, str>, DataType<'a>>,
     pub ts: OffsetDateTime,
 }
@@ -65,49 +68,49 @@ impl SqliteSubscriberBuilder {
         self
     }
 
+    /// Sets the device id associated with this logger
+    pub fn with_device_id(mut self, id: Uuid) -> Self {
+        self.device_id = Some(id);
+        self
+    }
+
     /// Finishes building the subscriber and installs it as the global default
-    pub fn init<P: AsRef<Path>>(self, path: P) -> anyhow::Result<SubscriberHandle> {
+    pub fn finish<P: AsRef<Path>>(self, path: P) -> anyhow::Result<SqliteSubscriber> {
         let db = Database::open(path)?;
-        let dest = Arc::new(RwLock::new(self.dest));
+        let device_id = self.device_id.ok_or_else(|| anyhow!("missing device id"))?;
 
         let subscriber = SqliteSubscriber {
-            db, max_level: self.max_level,
+            db,
+            max_level: self.max_level,
             next_id: AtomicU64::new(0),
-            dest: Arc::clone(&dest),
+            device_id
         };
 
-        let handle = SubscriberHandle { dest };
 
-        tracing::subscriber::set_global_default(subscriber)?;
-        Ok(handle)
-    }
-}
-
-impl SubscriberHandle {
-    /// Change the destination for tracing events
-    ///
-    /// ### Arguments
-    /// * `dest` - New tracing log/event/span destination
-    pub fn set_destination(&self, dest: LogDestination) {
-        *self.dest.write() = dest;
+        //tracing::subscriber::set_global_default(subscriber)?;
+        Ok(subscriber)
     }
 }
 
 impl SqliteSubscriber {
-    /// Returns a new builder for our subscriber 
+    /// Returns a new builder for our subscriber
     pub fn builder() -> SqliteSubscriberBuilder {
-        SqliteSubscriberBuilder { max_level: Level::ERROR, dest: LogDestination::Stdout }
+        SqliteSubscriberBuilder {
+            max_level: Level::ERROR,
+            device_id: None,
+        }
     }
 }
 
 impl tracing::Subscriber for SqliteSubscriber {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.level() <= &self.max_level
+        let level = metadata.level();
+        level <= &self.max_level
     }
 
     fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
         span::Id::from_u64(self.next_id.fetch_add(1, Ordering::Relaxed))
-    } 
+    }
 
     fn enter(&self, _span: &span::Id) {
         // TODO
@@ -121,15 +124,8 @@ impl tracing::Subscriber for SqliteSubscriber {
         let mut visitor = OathgateEvent::new(event.metadata());
         event.record(&mut visitor);
 
-        match *self.dest.read() {
-            LogDestination::Stdout => {
-                visitor.display();
-            },
-            LogDestination::Database(id) => {
-                if let Err(error) = LogEntry::save(&self.db, id, &visitor) {
-                    eprintln!("sqlite logger: {error}");
-                }
-            }
+        if let Err(error) = LogEntry::save(&self.db, Some(self.device_id), &visitor) {
+            eprintln!("sqlite logger: {error}");
         }
     }
 
@@ -147,7 +143,9 @@ impl<'a> tracing::field::Visit for OathgateEvent<'a> {
         let dbg = format!("{value:?}");
 
         match field.name() {
-            name if name.starts_with("r#") => self.data.insert(name[2..].into(), DataType::from(dbg)),
+            name if name.starts_with("r#") => {
+                self.data.insert(name[2..].into(), DataType::from(dbg))
+            }
             name => self.data.insert(name.into(), DataType::from(dbg)),
         };
     }
@@ -177,10 +175,15 @@ impl<'a> tracing::field::Visit for OathgateEvent<'a> {
     }
 
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.data.insert(field.name().into(), DataType::from(String::from(value)));
+        self.data
+            .insert(field.name().into(), DataType::from(String::from(value)));
     }
 
-    fn record_error(&mut self, field: &tracing::field::Field, value: &(dyn std::error::Error + 'static)) {
+    fn record_error(
+        &mut self,
+        field: &tracing::field::Field,
+        value: &(dyn std::error::Error + 'static),
+    ) {
         let err = format!("{value}");
         self.data.insert(field.name().into(), DataType::from(err));
     }
@@ -195,26 +198,24 @@ impl<'a> OathgateEvent<'a> {
             target: metadata.target().into(),
             line: metadata.line(),
             module: metadata.module_path().map(|m| Cow::Borrowed(m)),
-            level: *metadata.level(),
+            level: LogLevel::from(*metadata.level()),
             data,
             ts,
         }
     }
 
     pub fn display(&self) {
-        let style = self.level_style();
+        let style = self.level.style();
+        let style_dim = self.level.style().dim();
         let dim = Style::new().dim();
 
-        let pipe = format!("{}", style.apply_to("\u{251c}"));
-        let arrow = format!("{}", style.apply_to("\u{2514}"));
+        let pipe = format!("{}", style_dim.apply_to("\u{251c}"));
+        let arrow = format!("{}", style_dim.apply_to("\u{2514}"));
 
-        println!("{}", style.apply_to(self.level));
-
-        if let Some(msg) = self.data.get("message") {
-            println!("{pipe} {msg}");
+        match self.data.get("message") {
+            Some(msg) => println!("{}", style.apply_to(msg)),
+            None => println!("{}", style.apply_to("<no log message>")),
         }
-
-        println!("{pipe} {} {}", dim.apply_to("target ="), self.target);
 
         for (k, v) in &self.data {
             if *k == "message" {
@@ -224,19 +225,21 @@ impl<'a> OathgateEvent<'a> {
             println!("{pipe} {} {} {v}", dim.apply_to(k), dim.apply_to("="));
         }
 
-        println!("{arrow} {}", dim.apply_to(self.ts.format(&Rfc2822).unwrap()));
-    }
+        println!(
+            "{pipe} {} {}",
+            dim.apply_to("level ="),
+            style_dim.apply_to(&self.level)
+        );
 
-    fn level_style(&self) -> Style {
-        let style = Style::new();
+        println!("{pipe} {} {}", dim.apply_to("target ="), self.target);
 
-        match self.level {
-            Level::ERROR => style.red(),
-            Level::WARN => style.yellow(),
-            Level::INFO => style.green(),
-            Level::DEBUG => style.blue(),
-            Level::TRACE => style.white().dim(),
-        }
+        println!(
+            "{arrow} {} {}",
+            dim.apply_to("datetime ="),
+            self.ts.format(&Rfc2822).unwrap()
+        );
+
+        println!(""); // blank line for spacing
     }
 }
 
@@ -298,6 +301,61 @@ impl<'a> Display for DataType<'a> {
             Self::I64(i) => write!(f, "{i}"),
             Self::I128(i) => write!(f, "{i}"),
             Self::Boolean(b) => write!(f, "{b}"),
+        }
+    }
+}
+
+impl LogLevel {
+    pub fn style(&self) -> Style {
+        let style = Style::new();
+
+        match self {
+            Self::Error => style.red(),
+            Self::Warn => style.yellow(),
+            Self::Info => style.green(),
+            Self::Debug => style.blue(),
+            Self::Trace => style.dim(),
+        }
+    }
+}
+
+impl From<tracing::Level> for LogLevel {
+    fn from(value: tracing::Level) -> Self {
+        match value {
+            tracing::Level::ERROR => Self::Error,
+            tracing::Level::WARN => Self::Warn,
+            tracing::Level::INFO => Self::Info,
+            tracing::Level::DEBUG => Self::Debug,
+            tracing::Level::TRACE => Self::Trace,
+        }
+    }
+}
+
+impl Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let level = match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+            Self::Debug => "debug",
+            Self::Trace => "trace",
+        };
+
+        write!(f, "{level}")
+    }
+}
+
+impl FromStr for LogLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "error" => Ok(Self::Error),
+            "warn" => Ok(Self::Warn),
+            "info" => Ok(Self::Info),
+            "debug" => Ok(Self::Debug),
+            "trace" => Ok(Self::Trace),
+            _ => Err("unknown log level".into()),
         }
     }
 }

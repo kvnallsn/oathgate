@@ -7,7 +7,14 @@ use clap::Subcommand;
 use dialoguer::Confirm;
 use oathgate_bridge::{BridgeBuilder, BridgeConfig};
 
-use crate::{database::{log::LogEntry, Device, DeviceType}, fork::Forker, State, process};
+use crate::{
+    database::{log::LogEntry, Device, DeviceType},
+    fork::Forker,
+    logger::LogLevel,
+    process::{self, ProcessState}, State,
+};
+
+use super::LogFormat;
 
 #[derive(Debug, Subcommand)]
 pub enum BridgeCommand {
@@ -27,17 +34,26 @@ pub enum BridgeCommand {
         #[clap(short, long)]
         pcap: Option<PathBuf>,
 
+        /// Log spawned process
+        #[clap(long, default_value_t = LogLevel::Info)]
+        log_level: LogLevel,
+
         /// Name of bridge to start
         name: String,
     },
 
     /// Returns a list of all bridges, including inactive ones
+    #[clap(alias = "status")]
     List,
 
     /// Prints logs for a specific bridge
     Logs {
         /// Name of bridge to print logs
         name: String,
+
+        /// Format to save logs
+        #[clap(short, long, default_value_t = LogFormat::Pretty)]
+        format: LogFormat,
     },
 
     /// Stops an existing oathgate bridge
@@ -47,7 +63,7 @@ pub enum BridgeCommand {
     },
 
     /// Delete an existing oathgate bridge
-    Delete{
+    Delete {
         /// Name of bridge to delete
         name: String,
     },
@@ -56,19 +72,20 @@ pub enum BridgeCommand {
 impl BridgeCommand {
     /// Executes the command contained in this instance of the enum
     pub fn execute(self, state: &State) -> anyhow::Result<()> {
-        match self {
-            Self::Create { config, name } => create_bridge(state, config, name)?,
-            Self::Start { pcap, name } => start_bridge(state, name, pcap)?,
-            Self::List => list_bridges(state)?,
-            Self::Logs { name } => print_logs(state, name)?,
-            Self::Stop { name } => stop_bridge(state, name)?,
-            Self::Delete { name } => delete_bridge(state, name)?,
-        }
+        let res = match self {
+            Self::Create { config, name } => create_bridge(state, config, name),
+            Self::Start { pcap, name, .. } => start_bridge(state, name, pcap),
+            Self::List => list_bridges(state),
+            Self::Logs { name, format } => print_logs(state, name, format),
+            Self::Stop { name } => stop_bridge(state, name),
+            Self::Delete { name } => delete_bridge(state, name),
+        };
+
+        res.context("failed to execute bridge command")?;
 
         Ok(())
     }
 }
-
 
 /// Returns the bridge with the specified name. Returns an error if a bridge with the specified
 /// name is not found.
@@ -77,8 +94,8 @@ impl BridgeCommand {
 /// * `state` - Application state
 /// * `name` - Name of bridge to get / find
 fn get_bridge(state: &State, name: &str) -> anyhow::Result<Device> {
-    let device = Device::get(state.db(), &name)?.ok_or_else(|| anyhow!("device '{name}' not found"))?;
-    tracing::info!(bridge = %name, "found bridge");
+    let device =
+        Device::get(state.db(), &name)?.ok_or_else(|| anyhow!("device '{name}' not found"))?;
     Ok(device)
 }
 
@@ -89,11 +106,7 @@ fn get_bridge(state: &State, name: &str) -> anyhow::Result<Device> {
 /// * `config` - Path to bridge configuration file
 /// * `name` - Name of bridge (or None to generate one)
 /// * `start` - Starts the bridge after it is created
-fn create_bridge(
-    state: &State,
-    config: PathBuf,
-    name: Option<String>,
-) -> anyhow::Result<()> {
+fn create_bridge(state: &State, config: PathBuf, name: Option<String>) -> anyhow::Result<()> {
     let name = name
         .or_else(|| {
             let mut names = names::Generator::default();
@@ -101,17 +114,9 @@ fn create_bridge(
         })
         .ok_or_else(|| anyhow!("unable to generate name for device, please provide one"))?;
 
-    tracing::info!(
-        bridge = %name,
-        "creating new bridge from configuration file '{}'",
-        config.display()
-    );
-
-    let cfg = BridgeConfig::load(&config)?;
+    let cfg = BridgeConfig::load(&config).context("failed to parse bridge config")?;
     let device = Device::new(state.ctx(), &name, DeviceType::Bridge, &cfg);
-    device.save(state.db())?;
-
-    tracing::info!(bridge = %name, "successfully created bridge");
+    device.save(state.db()).context("failed to insert bridge into database")?;
 
     Ok(())
 }
@@ -125,24 +130,20 @@ fn create_bridge(
 /// * `pcap` - Path to file to save pcap (or None to disable pcap)
 fn start_bridge(state: &State, name: String, pcap: Option<PathBuf>) -> anyhow::Result<()> {
     let mut device = get_bridge(state, &name)?;
-    state.log_to_database(device.id());
 
     let config: BridgeConfig = device.config()?;
 
-    let stdout = state.base.join(&name).with_extension("log");
-
+    let logger = state.subscriber(device.id())?;
     let bridge = BridgeBuilder::default().pcap(pcap).build(config, &name)?;
-    let pid = Forker::default().stdout(stdout).fork(move || {
+    let pid = Forker::with_subscriber(logger).fork(move || {
         bridge.run()?;
         Ok(())
     })?;
 
-
-    device.set_pid(pid.as_raw());
-    device.save(state.db()).context("unable to save device in database")?;
-
-    tracing::info!(bridge = %name, %pid, "started bridge");
-    state.log_to_stdout();
+    device.set_started(pid.as_raw());
+    device
+        .save(state.db())
+        .context("unable to save device in database")?;
 
     Ok(())
 }
@@ -151,23 +152,21 @@ fn start_bridge(state: &State, name: String, pcap: Option<PathBuf>) -> anyhow::R
 ///
 /// ### Arguments
 /// * `state` - Application state
-/// * `name` - Name of bridge to stop 
+/// * `name` - Name of bridge to stop
 fn stop_bridge(state: &State, name: String) -> anyhow::Result<()> {
     let mut device = get_bridge(state, &name)?;
-    state.log_to_database(device.id());
 
-    match device.pid() {
-        Some(pid) => match process::stop(state, pid, "Stop device?")? {
+    match device.status() {
+        ProcessState::Running(pid) => match process::stop(state, pid, "Stop device")? {
             true => {
-                device.clear_pid();
+                device.set_stopped();
                 device.save(state.db())?;
                 println!("stopped device");
             }
             false => println!("operation cancelled"),
-        },
-        None => println!("device not running"),
+        }
+        _ => (),
     }
-    state.log_to_stdout();
 
     Ok(())
 }
@@ -181,12 +180,20 @@ fn list_bridges(state: &State) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_logs(state: &State, name: String) -> anyhow::Result<()> {
+fn print_logs(state: &State, name: String, format: LogFormat) -> anyhow::Result<()> {
     let device = get_bridge(state, &name)?;
     let logs = LogEntry::get(state.db(), device.id())?;
 
-    for log in logs {
-        log.display();
+    match format {
+        LogFormat::Pretty => {
+            for log in logs {
+                log.display();
+            }
+        }
+        LogFormat::Json => {
+            let json = serde_json::to_string(&logs)?;
+            println!("{json}");
+        }
     }
 
     Ok(())
@@ -200,10 +207,10 @@ fn print_logs(state: &State, name: String) -> anyhow::Result<()> {
 fn delete_bridge(state: &State, name: String) -> anyhow::Result<()> {
     let mut device = get_bridge(state, &name)?;
 
-    match device.pid() {
-        Some(pid) => match process::stop(state, pid, "Stop device?")? {
+    match device.status() {
+        ProcessState::Running(pid) => match process::stop(state, pid, "Stop device?")? {
             true => {
-                device.clear_pid();
+                device.set_stopped();
                 device.save(state.db())?;
                 println!("stopped device");
             }
@@ -212,10 +219,11 @@ fn delete_bridge(state: &State, name: String) -> anyhow::Result<()> {
                 return Ok(());
             }
         },
-        None => (),
+        _ => (),
     }
 
-    let confirmation = state.skip_confirm() || Confirm::new().with_prompt("Delete device?").interact()?;
+    let confirmation =
+        state.skip_confirm() || Confirm::new().with_prompt("Delete device?").interact()?;
 
     if confirmation {
         device.delete(state.db())?;
