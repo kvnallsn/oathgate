@@ -1,6 +1,6 @@
 //! Help utility to fork process
 
-use nix::unistd::{ForkResult, Pid};
+use nix::{sys::{signal::Signal, signalfd::{SfdFlags, SigSet, SignalFd}}, unistd::{ForkResult, Pid}};
 use tracing::Subscriber;
 
 
@@ -23,38 +23,37 @@ impl Forker {
     ///
     /// ### Arguments
     /// * `f` - Function to execute in the child process
-    pub fn fork<F: FnOnce() -> anyhow::Result<()>>(self, f: F) -> anyhow::Result<Pid> {
+    pub fn fork<F: FnOnce(SignalFd) -> anyhow::Result<()>>(self, f: F) -> anyhow::Result<Pid> {
+        // block SIGTERM before forking
+        let mut sigmask = SigSet::empty();
+        sigmask.add(Signal::SIGTERM);
+        sigmask.thread_block()?;
+
+        let sfd = SignalFd::with_flags(&sigmask, SfdFlags::SFD_NONBLOCK)?;
+
         match unsafe { nix::unistd::fork()? } {
             ForkResult::Child => {
-                /*
-                if let Some(stdout) = self.stdout {
-                    if let Err(error) = File::options()
-                        .append(true)
-                        .create(true)
-                        .open(stdout)
-                        .map_err(anyhow::Error::from)
-                        .and_then(|fd| {
-                            nix::unistd::dup2(fd.as_raw_fd(), nix::libc::STDOUT_FILENO)
-                                .map_err(anyhow::Error::from)
-                        }) {
-                        // unable to redirect stdout
-                    }
-                }
-                */
-
                 if let Some(subscriber) = self.subscriber {
                     tracing::subscriber::set_global_default(subscriber).ok();
                 }
 
-                match f() {
-                    Ok(_) => std::process::exit(0),
+                let exit_code = match f(sfd) {
+                    Ok(_) => {
+                        tracing::debug!("process exiting");
+                        0
+                    },
                     Err(error) => {
-                        eprintln!("failed to fork: {error}");
-                        std::process::exit(-1);
+                        tracing::error!("unable to run process: {error}");
+                        tracing::error!("cause: {}", error.root_cause());
+                        -1
                     }
-                }
+                };
+
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                std::process::exit(exit_code);
             }
             ForkResult::Parent { child } => {
+                sigmask.thread_unblock()?;
                 return Ok(child);
             }
         }

@@ -33,7 +33,7 @@ pub fn stop(state: &State, pid: i32, prompt: &str) -> anyhow::Result<bool> {
 
         for _ in 0..3 {
             nix::sys::signal::kill(pid, Signal::SIGTERM)?;
-            std::thread::sleep(std::time::Duration::from_millis(250));
+            std::thread::sleep(std::time::Duration::from_millis(1_000));
 
             match check(pid.as_raw())? {
                 ProcessState::Dead(_) | ProcessState::Stopped  => {

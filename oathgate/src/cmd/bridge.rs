@@ -133,10 +133,14 @@ fn start_bridge(state: &State, name: String, pcap: Option<PathBuf>) -> anyhow::R
 
     let config: BridgeConfig = device.config()?;
 
+    let bridge = BridgeBuilder::default()
+        .pcap(pcap)
+        .base(state.network_dir())
+        .build(config, &name)?;
+
     let logger = state.subscriber(device.id())?;
-    let bridge = BridgeBuilder::default().pcap(pcap).build(config, &name)?;
-    let pid = Forker::with_subscriber(logger).fork(move || {
-        bridge.run()?;
+    let pid = Forker::with_subscriber(logger).fork(move |sfd| {
+        bridge.run(sfd)?;
         Ok(())
     })?;
 

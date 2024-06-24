@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use nix::sys::{
+    signal::Signal,
+    signalfd::{SfdFlags, SigSet, SignalFd},
+};
 use oathgate_bridge::{BridgeBuilder, BridgeConfig};
 use tracing::Level;
 
@@ -38,10 +42,16 @@ fn main() {
 
     let cfg = BridgeConfig::load(&opts.config).unwrap();
 
+    let mut sigmask = SigSet::empty();
+    sigmask.add(Signal::SIGTERM);
+    sigmask.thread_block().unwrap();
+
+    let sfd = SignalFd::with_flags(&sigmask, SfdFlags::SFD_NONBLOCK).unwrap();
+
     if let Err(error) = BridgeBuilder::default()
         .pcap(opts.pcap)
         .build(cfg, "oathgate.sock")
-        .and_then(|bridge| bridge.run())
+        .and_then(|bridge| bridge.run(sfd))
     {
         tracing::error!(?error, "unable to run oathgate-bridge");
     }

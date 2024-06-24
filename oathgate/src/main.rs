@@ -140,12 +140,25 @@ impl State {
         &self.ctx
     }
 
+    /// Returns the path the hypervisor's directory based on the base path
     pub fn hypervisor_dir(&self) -> PathBuf {
         let hvdir = self.base.join("hypervisor");
         if !hvdir.exists() {
             std::fs::create_dir_all(&hvdir).ok();
         }
         hvdir
+    }
+
+    /// Returns the path the network directory based on the base path
+    ///
+    /// The network directory stores the various files (such as unix domain sockets) needed
+    /// to provided access to a given network or bridge
+    pub fn network_dir(&self) -> PathBuf {
+        let dir = self.base.join("network");
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir).ok();
+        }
+        dir
     }
 }
 
@@ -164,12 +177,7 @@ fn main() -> anyhow::Result<()> {
         Ok::<(), anyhow::Error>(())
     };
 
-    match execute() {
-        Ok(_) => (),
-        Err(error) => {
-            eprintln!("{error}");
-        }
-    }
+    execute()?;
 
     Ok(())
 }

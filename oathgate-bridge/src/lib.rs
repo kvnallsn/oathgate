@@ -5,13 +5,12 @@ mod net;
 use std::{os::fd::AsRawFd, path::PathBuf};
 
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
-use nix::sys::{
-    signal::Signal,
-    signalfd::{SfdFlags, SigSet, SignalFd},
-};
+use nix::sys::signalfd::SignalFd;
 use oathgate_vhost::{DeviceOpts, VHostSocket};
 
 pub use self::config::Config as BridgeConfig;
+
+const DEFAULT_BASE_PATH: &str = "/tmp/oathgate/network";
 
 use crate::{
     config::WanConfig,
@@ -31,6 +30,9 @@ use crate::{
 pub struct BridgeBuilder {
     /// Path to pcap file, or None to disable pcap
     pcap: Option<PathBuf>,
+
+    /// Path to base directory for bridge-related files
+    base: Option<PathBuf>,
 }
 
 pub struct Bridge {
@@ -49,14 +51,25 @@ impl BridgeBuilder {
         self
     }
 
+    /// Sets the base path to use for storing bridge-related files
+    ///
+    /// ### Arguments
+    /// * `base` - Base path (directory)
+    pub fn base<P: Into<PathBuf>>(mut self, base: P) -> Self {
+        self.base = Some(base.into());
+        self
+    }
+
     pub fn build<S: Into<String>>(self, cfg: BridgeConfig, name: S) -> Result<Bridge, Error> {
         let name = name.into();
-        let socket = format!("/tmp/oathgate/{name}.sock");
 
-        tracing::debug!(?cfg, "bridge configuration");
+        let socket_path = self.base
+            .unwrap_or_else(|| DEFAULT_BASE_PATH.into())
+            .join(name)
+            .with_extension("sock");
 
         Ok(Bridge {
-            socket_path: socket.into(),
+            socket_path,
             pcap: self.pcap,
             cfg,
         })
@@ -81,7 +94,7 @@ fn parse_wan(cfg: WanConfig) -> Result<Option<Box<dyn Wan>>, Error> {
 }
 
 impl Bridge {
-    pub fn run(self) -> Result<(), Error> {
+    pub fn run(self, sfd: SignalFd) -> Result<(), Error> {
         const TOKEN_VHOST: Token = Token(0);
         const TOKEN_SIGNAL: Token = Token(1);
 
@@ -103,12 +116,6 @@ impl Bridge {
             .register_proto_handler(IcmpHandler::default())
             .register_proto_handler(udp_handler)
             .spawn(self.cfg.router.ipv4, switch.clone())?;
-
-        let mut sigmask = SigSet::empty();
-        sigmask.add(Signal::SIGTERM);
-        sigmask.thread_block()?;
-
-        let sfd = SignalFd::with_flags(&sigmask, SfdFlags::SFD_NONBLOCK)?;
 
         let mut poller = Poll::new()?;
         poller
@@ -150,6 +157,7 @@ impl Bridge {
             }
         }
 
+        std::fs::remove_file(&self.socket_path).ok();
         tracing::info!(socket = %self.socket_path.display(), "bridge stopped");
 
         Ok(())

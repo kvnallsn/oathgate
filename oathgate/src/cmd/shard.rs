@@ -97,7 +97,7 @@ fn run_shard(
     let logger = state.subscriber(bridge.id())?;
     let name = hv.name().to_owned();
     let cid = hv.cid();
-    let pid = Forker::with_subscriber(logger).fork(move || {
+    let pid = Forker::with_subscriber(logger).fork(move |_sfd| {
         hv.run()?;
         Ok(())
     })?;
