@@ -16,6 +16,9 @@ pub enum Error {
     #[error("network: {0}")]
     Network(#[from] crate::net::NetworkError),
 
+    #[error("system: {0}")]
+    System(#[from] nix::errno::Errno),
+
     #[error("{0}")]
     Other(Cow<'static, str>),
 }
