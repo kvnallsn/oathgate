@@ -2,14 +2,17 @@
 
 mod bridge;
 mod shard;
+mod template;
 
 use std::fmt::Display;
 
 use clap::{Args, ValueEnum};
+use console::style;
+use uuid::Uuid;
 
-use crate::logger::LogLevel;
+use crate::{database::log::LogEntry, logger::LogLevel, State};
 
-pub use self::{bridge::BridgeCommand, shard::ShardCommand};
+pub use self::{bridge::BridgeCommand, shard::ShardCommand, template::TemplateCommand};
 
 #[derive(Args, Debug)]
 pub struct LogSettings {
@@ -91,11 +94,14 @@ pub fn draw_table<T: AsTable>(rows: &[T]) {
         println!("{e}");
     };
 
-
     draw_separator("first");
     print!("{pipe}");
     for (i, header) in T::header().iter().enumerate() {
-        print!(" {:width$} {pipe}", header, width = col_widths[i]);
+        print!(
+            " {:width$} {pipe}",
+            style(header).dim(),
+            width = col_widths[i]
+        );
     }
     println!();
     draw_separator("middle");
@@ -109,4 +115,29 @@ pub fn draw_table<T: AsTable>(rows: &[T]) {
     draw_separator("last");
 
     term.flush().ok();
+}
+
+
+/// Prints logs to the terminal for the corresponding id
+///
+/// ### Arguments
+/// * `state` - Application state
+/// * `id` - Id of device/shard/etc. to print logs for
+/// * `format` - Format to print logs
+pub(crate) fn print_logs(state: &State, id: Uuid, format: LogFormat) -> anyhow::Result<()> {
+    let logs = LogEntry::get(state.db(), id)?;
+
+    match format {
+        LogFormat::Pretty => {
+            for log in logs {
+                log.display();
+            }
+        }
+        LogFormat::Json => {
+            let json = serde_json::to_string(&logs)?;
+            println!("{json}");
+        }
+    }
+
+    Ok(())
 }

@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fd = File::open(&opts.config)?;
     let cfg: Config = serde_yaml::from_reader(fd)?;
 
-    let mut hypervisor = Hypervisor::new(&opts.bridge, opts.name, cfg.machine)?;
+    let mut hypervisor = Hypervisor::new(&opts.bridge, opts.name, 1010, cfg.machine)?;
 
     if !opts.daemon {
         tui::run(hypervisor)?;

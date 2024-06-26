@@ -9,7 +9,8 @@ pub(crate) mod process;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use cmd::{BridgeCommand, ShardCommand};
+use cmd::{BridgeCommand, ShardCommand, TemplateCommand};
+use console::style;
 use logger::SqliteSubscriber;
 use uuid::{NoContext, Uuid};
 
@@ -33,7 +34,7 @@ pub struct Opts {
     #[clap(short, long, default_value = "oathgate.db")]
     pub database: PathBuf,
 
-    /// Assume yes, don't prompt for confirmation
+    /// Assume yes, don't prompt for confirmationimplementation
     #[clap(long, global = true)]
     pub yes_dont_ask_again: bool,
 
@@ -54,6 +55,12 @@ pub enum Command {
     Shard {
         #[clap(subcommand)]
         command: ShardCommand,
+    },
+
+    /// Manage shard templates
+    Template {
+        #[clap(subcommand)]
+        command: TemplateCommand,
     },
 }
 
@@ -140,13 +147,10 @@ impl State {
         &self.ctx
     }
 
-    /// Returns the path the hypervisor's directory based on the base path
-    pub fn hypervisor_dir(&self) -> PathBuf {
-        let hvdir = self.base.join("hypervisor");
-        if !hvdir.exists() {
-            std::fs::create_dir_all(&hvdir).ok();
-        }
-        hvdir
+    /// Generates a new name to identify a device/shard/etc.
+    pub fn generate_name(&self) -> String {
+        let mut names = names::Generator::default();
+        names.next().unwrap()
     }
 
     /// Returns the path the network directory based on the base path
@@ -154,7 +158,29 @@ impl State {
     /// The network directory stores the various files (such as unix domain sockets) needed
     /// to provided access to a given network or bridge
     pub fn network_dir(&self) -> PathBuf {
-        let dir = self.base.join("network");
+        self.subdir("networks")
+    }
+
+    /// Returns the path to the archive directory
+    ///
+    /// The archive directory contains compressed images of VMs/shards ready to be deployed
+    pub fn archive_dir(&self) -> PathBuf {
+        self.subdir("archives")
+    }
+
+    /// Returns the path to the shard directory
+    ///
+    /// The shard directory contains the files for active/running shards (vms)
+    pub fn shard_dir(&self) -> PathBuf {
+        self.subdir("shards")
+    }
+
+    /// Returns the path to a specific subdirectory relative to the base path
+    ///
+    /// ### Arguments
+    /// * `name` - Name of subdirectory to open/create
+    fn subdir(&self, name: &str) -> PathBuf {
+        let dir = self.base.join(name);
         if !dir.exists() {
             std::fs::create_dir_all(&dir).ok();
         }
@@ -172,12 +198,15 @@ fn main() -> anyhow::Result<()> {
         match opts.command {
             Command::Bridge { command } => command.execute(&state)?,
             Command::Shard { command } => command.execute(&state)?,
+            Command::Template { command } => command.execute(&state)?,
         }
 
         Ok::<(), anyhow::Error>(())
     };
 
-    execute()?;
+    if let Err(error) = execute() {
+        eprintln!("{} {:?}", style("error:").red(), style(error).red());
+    }
 
     Ok(())
 }

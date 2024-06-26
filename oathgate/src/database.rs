@@ -2,9 +2,13 @@
 
 pub(crate) mod device;
 pub(crate) mod log;
+pub(crate) mod migration;
 pub(crate) mod shard;
 
-use std::{path::{Path, PathBuf}, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::Context;
 use parking_lot::Mutex;
@@ -13,10 +17,11 @@ use rusqlite::Connection;
 use crate::database::{log::LogEntry, shard::Shard};
 
 pub use self::device::{Device, DeviceType};
+use self::shard::ShardTemplate;
 
 /// Provides access to the database used to track bridges, etc.
 ///
-/// The database provides a stateful way of monitoring pids associated with various components of
+/// The database provid:wes a stateful way of monitoring pids associated with various components of
 /// the oathgate ecosystem.  When devices (such as bridges) are created, an entry is made into the
 /// database containing the necessary metadata (pids, etc.) to control and interact with each
 /// device.
@@ -39,20 +44,19 @@ impl Database {
             path: path.to_path_buf(),
         };
 
-        db.transaction(|conn| {
-            conn.execute(LogEntry::table(), ())
-                .context("unable to create log table")?;
+        db.migrate().context("database migration failed")?;
 
-            conn.execute(Device::table(), ())
-                .context("unable to create device table")?;
+        Ok(db)
+    }
 
-            conn.execute(Shard::table(), ())
-                .context("unable to create shard table")?;
-
+    /// Applies migrations against the database, if necessary
+    pub fn migrate(&self) -> anyhow::Result<()> {
+        self.transaction(|conn| {
+            migration::version_000(conn).context("migration 000 failed")?;
             Ok(())
         })?;
 
-        Ok(db)
+        Ok(())
     }
 
     /// Starts a new transaction within the database

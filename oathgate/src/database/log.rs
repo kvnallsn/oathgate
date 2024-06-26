@@ -15,21 +15,6 @@ use super::Database;
 pub struct LogEntry;
 
 impl LogEntry {
-    /// Returns a string representing the table's schema
-    pub fn table() -> &'static str {
-        "CREATE TABLE IF NOT EXISTS logs (
-            id      BLOB PRIMARY KEY,
-            device  BLOB,
-            level   TEXT NOT NULL,
-            target  TEXT NOT NULL,
-            ts      TEXT NOT NULL,
-            module  TEXT,
-            line    INTEGER,
-            data    JSON
-
-        )"
-    }
-
     pub fn save(db: &Database, device: Option<Uuid>, event: &OathgateEvent) -> anyhow::Result<()> {
         let id = Uuid::new_v4();
         let level = event.level.to_string();

@@ -8,7 +8,7 @@ use dialoguer::Confirm;
 use oathgate_bridge::{BridgeBuilder, BridgeConfig};
 
 use crate::{
-    database::{log::LogEntry, Device, DeviceType},
+    database::{Device, DeviceType},
     fork::Forker,
     logger::LogLevel,
     process::{self, ProcessState}, State,
@@ -184,22 +184,15 @@ fn list_bridges(state: &State) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Prints logs to the terminal
+///
+/// ### Arguments
+/// * `state` - Application state
+/// * `name` - Name of device
+/// * `format` - Format to print logs (json, pretty, etc.)
 fn print_logs(state: &State, name: String, format: LogFormat) -> anyhow::Result<()> {
     let device = get_bridge(state, &name)?;
-    let logs = LogEntry::get(state.db(), device.id())?;
-
-    match format {
-        LogFormat::Pretty => {
-            for log in logs {
-                log.display();
-            }
-        }
-        LogFormat::Json => {
-            let json = serde_json::to_string(&logs)?;
-            println!("{json}");
-        }
-    }
-
+    super::print_logs(state, device.id(), format)?;
     Ok(())
 }
 

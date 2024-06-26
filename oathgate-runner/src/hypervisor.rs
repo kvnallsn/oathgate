@@ -63,9 +63,10 @@ impl Hypervisor {
     pub fn new<P: AsRef<Path>, S: Into<String>>(
         network: P,
         name: S,
+        cid: u32,
         config: MachineConfig,
     ) -> Result<Self, HypervisorError> {
-        let vm = VmHandle::new(network, config)?;
+        let vm = VmHandle::new(network, cid, config)?;
 
         tracing::debug!(
             "binding hypervisor socket (cid = {}, port = {})",

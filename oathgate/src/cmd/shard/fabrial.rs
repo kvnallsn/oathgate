@@ -204,7 +204,7 @@ fn run_ui(sock: RawFd) -> anyhow::Result<()> {
 }
 
 pub fn run(cid: u32, port: u32) -> anyhow::Result<()> {
-    let sock = connect(cid, port).context("unable to connect to socket")?;
+    let sock = connect(cid, port).with_context(|| format!("unable to connect to socket: cid: {cid}, port: {port}"))?;
 
     let sfd = sock.as_raw_fd();
     std::thread::Builder::new()

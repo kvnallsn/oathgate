@@ -6,21 +6,6 @@ edition = "2021"
 license = "MIT"
 authors = ["Kevin Allison"]
 
-[features]
-client = ["crossterm"]
-
-[[bin]]
-name = "fabrial-client"
-path = "src/bin/fabrial-client.rs"
-required-features = ["client"]
-
-#[[bin]]
-#name = "fabrial-server"
-
-[lib]
-name = "fabrial"
-path = "src/lib.rs"
-
 [package.metadata.deb]
 revision = "4"
 maintainer-scripts = "debian/"
@@ -28,7 +13,6 @@ systemd-units = { enable = true }
 
 [dependencies]
 clap = { workspace = true }
-crossterm = { version = "0.27", optional = true }
 mio = { workspace = true }
 nix = { workspace = true }
 oathgate-net = { path = "../oathgate-net" }

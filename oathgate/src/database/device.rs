@@ -35,16 +35,6 @@ pub enum DeviceType {
 }
 
 impl Device {
-    /// Returns a string representing the table's schema
-    pub fn table() -> &'static str {
-        "CREATE TABLE IF NOT EXISTS devices (
-            id      BLOB PRIMARY KEY,
-            pid     INTEGER,
-            name    TEXT NOT NULL,
-            device  INTEGER NOT NULL,
-            config  JSON NOT NULL
-        )"
-    }
     /// Creates a new device from the provided parameters
     ///
     /// ### Arguments
@@ -156,9 +146,22 @@ impl Device {
         self.id
     }
 
+    /// Returns the name of this device
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
     /// Returns the status of this process
     pub fn status(&self) -> ProcessState {
         self.state
+    }
+
+    /// Returns true if this device is running (and not dead/zombie/hanging)
+    pub fn is_running(&self) -> bool {
+        match self.state {
+            ProcessState::Running(_) => true,
+            _ => false,
+        }
     }
 
     /// Mark the device as running
@@ -173,7 +176,7 @@ impl Device {
 
     /// Returns the path to the unix domain socket connected to this process
     pub fn uds(&self, state: &State) -> PathBuf {
-        state.base.join(&self.name).with_extension("sock")
+        state.network_dir().join(&self.name).with_extension("sock")
     }
 
     /// Returns the configuration object stored in this device entry

@@ -30,12 +30,16 @@ pub struct VmHandle {
 }
 
 impl VmHandle {
-    pub fn new<P: AsRef<Path>>(socket: P, machine: MachineConfig) -> io::Result<Self> {
+    /// Creates a new handle to virtual machine
+    ///
+    /// ### Arguments
+    /// * `socket` - Path to network bridge socket
+    /// * `cid` - Context id of this virtual machine
+    /// * `machine` - Machine configuration
+    pub fn new<P: AsRef<Path>>(socket: P, cid: u32, machine: MachineConfig) -> io::Result<Self> {
         let socket = socket.as_ref();
 
         let mac = machine.mac.unwrap_or_else(|| MacAddress::generate());
-        let bytes = mac.as_bytes();
-        let cid = u32::from_be_bytes([0x00, 0x00, bytes[4], bytes[5]]);
 
         tracing::debug!("launching vm, mac = {mac}, cid = {cid:04x}");
 

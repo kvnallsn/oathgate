@@ -1,3 +1,6 @@
+mod error;
+mod tty;
+
 use std::{
     fs::File,
     io,
@@ -8,17 +11,21 @@ use std::{
 };
 
 use clap::Parser;
-use fabrial::{tty::SockTTY, Error};
 use mio::{unix::SourceFd, Events, Interest, Poll, Token};
-use nix::sys::{
-    socket::{
-        accept, bind, connect, listen, socket, AddressFamily, Backlog, MsgFlags, SockFlag,
-        SockType, SockaddrIn, SockaddrLike, VsockAddr,
+use nix::{
+    libc::VMADDR_CID_ANY,
+    sys::{
+        socket::{
+            accept, bind, connect, listen, socket, AddressFamily, Backlog, MsgFlags, SockFlag,
+            SockType, SockaddrIn, SockaddrLike, VsockAddr,
+        },
+        timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags},
     },
-    timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags},
 };
 use oathgate_net::types::MacAddress;
 use tracing_subscriber::fmt::writer::{BoxMakeWriter, Tee};
+
+pub use self::{error::Error, tty::SockTTY};
 
 #[derive(Debug, Parser)]
 struct Opts {
@@ -116,7 +123,7 @@ fn run(opts: Opts) -> Result<(), Error> {
             (sock, host)
         }
         false => {
-            let addr = VsockAddr::new(cid, opts.port);
+            let addr = VsockAddr::new(VMADDR_CID_ANY, opts.port);
             let sock = socket(
                 AddressFamily::Vsock,
                 SockType::Stream,

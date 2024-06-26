@@ -12,7 +12,7 @@ use nix::{
     sys::{signal::Signal, socket::{MsgFlags, Shutdown}},
 };
 
-use crate::ErrorContext;
+use crate::error::{Error, ErrorContext};
 
 /// Performs a non-blocking recv call, returning 0 if it would block (i.e., EAGAIN / EWOULDBLOCK)
 macro_rules! non_blocking_recv {
@@ -38,7 +38,7 @@ pub enum SocketAction {
 }
 
 impl SockTTY {
-    pub fn spawn(client: RawFd, cmd: &str) -> Result<JoinHandle<()>, super::Error> {
+    pub fn spawn(client: RawFd, cmd: &str) -> Result<JoinHandle<()>, Error> {
         let cmd = std::ffi::CString::new(cmd)?;
         let env = ["TERM=xterm-256color"]
             .into_iter()
@@ -89,7 +89,7 @@ impl SockTTY {
         }
     }
 
-    pub fn run(&self) -> Result<(), super::Error> {
+    pub fn run(&self) -> Result<(), Error> {
         const TOKEN_SOCK: Token = Token(10);
         const TOKEN_TTY: Token = Token(20);
         const MAX_EVENTS: usize = 10;

@@ -1,7 +1,3 @@
-//! Fabrial library
-
-pub mod tty;
-
 /// A wrapper type for fabrial errors
 pub struct Error {
     inner: Box<dyn std::error::Error + Send + Sync>,
