@@ -62,6 +62,7 @@ impl TemplateCommand {
 /// Copies a shard's packed vm archive into the shard directory
 fn import_template(state: &State, archive: PathBuf, name: Option<String>) -> anyhow::Result<()> {
     let name = name.unwrap_or_else(|| state.generate_name());
+    let bar = super::spinner(format!("importing template {name}"));
 
     if !archive.exists() {
         return Err(anyhow!(
@@ -100,7 +101,7 @@ fn import_template(state: &State, archive: PathBuf, name: Option<String>) -> any
     let template = ShardTemplate::new(state.ctx(), name);
     template.save(state.db())?;
 
-    println!("installed shard '{}'", template.name());
+    bar.finish_with_message("imported complete");
 
     Ok(())
 }
@@ -108,7 +109,7 @@ fn import_template(state: &State, archive: PathBuf, name: Option<String>) -> any
 /// Deploys a shard template
 fn deploy_template(state: &State, template: String, name: Option<String>) -> anyhow::Result<()> {
     let name = name.unwrap_or_else(|| state.generate_name());
-    println!("deploying shard template '{template}' as '{name}'");
+    let bar = super::spinner(format!("deploying shard template '{template}' as '{name}'"));
 
     let template = ShardTemplate::get(state.db(), &template)?;
 
@@ -130,8 +131,8 @@ fn deploy_template(state: &State, template: String, name: Option<String>) -> any
     let shard = Shard::new(state.ctx(), &name);
     shard.save(&state.db())?;
 
-    println!("deployed shard '{name}'");
-
+    bar.finish_with_message("deployment complete");
+    
     Ok(())
 }
 

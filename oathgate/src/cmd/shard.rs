@@ -75,7 +75,8 @@ impl ShardCommand {
 }
 
 fn run_shard(state: &State, bridge: String, name: String) -> anyhow::Result<()> {
-    println!("starting shard '{name}'");
+    let bar = super::spinner(format!("starting shard {name}"));
+
     let mut shard = Shard::get(state.db(), &name)?.ok_or_else(|| anyhow!("shard not found"))?;
 
     let bridge =
@@ -88,10 +89,6 @@ fn run_shard(state: &State, bridge: String, name: String) -> anyhow::Result<()> 
         ))?;
     }
 
-    println!(
-        "loading configuration: {}",
-        shard.config_file_path(state).display()
-    );
     let cfg = Config::from_yaml(shard.config_file_path(state))
         .context("unable to parse configuration file")?;
     let mut hv = Hypervisor::new(bridge.uds(state), shard.name(), shard.cid(), cfg.machine)?;
@@ -108,7 +105,7 @@ fn run_shard(state: &State, bridge: String, name: String) -> anyhow::Result<()> 
     shard.set_running(pid.as_raw());
     shard.save(state.db())?;
 
-    println!("spawned shard {} (pid = {pid})", shard.name());
+    bar.finish_with_message(format!("started {name} with pid {pid}"));
 
     Ok(())
 }
@@ -123,26 +120,34 @@ fn list_shards(state: &State) -> anyhow::Result<()> {
 }
 
 fn stop_shard(state: &State, name: String) -> anyhow::Result<()> {
+    if !super::confirm(state, "Stop shard?")? {
+        println!("cancelled");
+        return Ok(());
+    }
+
+    let bar = super::spinner(format!("stopping shard {name}"));
+
     match Shard::get(state.db(), &name)? {
-        None => println!("shard '{name}' not found!"),
+        None => bar.finish_with_message("shard not found"),
         Some(mut shard) => match shard.state() {
-            ProcessState::Running(pid) => match process::stop(state, pid, "Stop shard?")? {
+            ProcessState::Running(pid) => match process::stop(pid)? {
                 true => {
                     shard.set_stopped();
                     shard.save(state.db())?;
-                    println!("shard stopped");
+                    bar.finish_with_message("shard stopped");
                 }
-                false => println!("operation cancelled"),
+                false => bar.finish_with_message("unable to stop shard"),
             },
             ProcessState::Dead(_) => {
                 shard.set_stopped();
                 shard.save(state.db())?;
-                println!("shard stopped");
+                bar.finish_with_message("shard stopped");
             }
-            ProcessState::PermissionDenied(_) => (),
-            ProcessState::Stopped => println!("shard not running"),
+            ProcessState::PermissionDenied(_) => bar.finish_with_message("permission denied"),
+            ProcessState::Stopped => bar.finish_with_message("shard not running"),
         },
     }
+
     Ok(())
 }
 

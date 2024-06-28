@@ -3,7 +3,6 @@
 use std::{fmt::Display, path::PathBuf};
 
 use anyhow::Context;
-use console::style;
 use rusqlite::{
     params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},

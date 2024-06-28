@@ -2,12 +2,9 @@
 
 use std::fmt::Display;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use console::{Style, StyledObject};
-use dialoguer::Confirm;
 use nix::{errno::Errno, sys::signal::Signal, unistd::Pid};
-
-use crate::State;
 
 #[derive(Clone, Copy, Debug)]
 pub enum ProcessState {
@@ -20,36 +17,33 @@ pub enum ProcessState {
 /// Helper function to prompt for confirmation and, if approved, stop a process
 ///
 /// ### Arguments
-/// * `state` - Application state
 /// * `pid` - Process id of process to stop
-/// * `prompt` - Prompt to display in confirmation prompt
-pub fn stop(state: &State, pid: i32, prompt: &str) -> anyhow::Result<bool> {
-    let confirmation =
-        state.skip_confirm() || Confirm::new().with_prompt(prompt).interact()?;
+pub fn stop(pid: i32) -> anyhow::Result<bool> {
+    // send a sigterm to the process
+    let pid = Pid::from_raw(pid);
 
-    if confirmation {
-        // send a sigterm to the process
-        let pid = Pid::from_raw(pid);
-
-        for _ in 0..3 {
-            nix::sys::signal::kill(pid, Signal::SIGTERM)?;
-            std::thread::sleep(std::time::Duration::from_millis(1_000));
-
-            match check(pid.as_raw())? {
-                ProcessState::Dead(_) | ProcessState::Stopped  => {
-                    return Ok(true);
-                }
-                ProcessState::PermissionDenied(_) => {
-                    return Err(anyhow!("permission denied"));
-                }
-                _ => (),
-            }
+    for i in 0..4 {
+        match i {
+            3 => nix::sys::signal::kill(pid, Signal::SIGKILL)
+                .with_context(|| format!("unable to send sigkill to process {pid}"))?,
+            _ => nix::sys::signal::kill(pid, Signal::SIGTERM)
+                .with_context(|| format!("unable to send sigterm to process {pid}"))?,
         }
 
-        Ok(false)
-    } else {
-        Ok(false)
+        std::thread::sleep(std::time::Duration::from_millis(1_000));
+
+        match check(pid.as_raw())? {
+            ProcessState::Dead(_) | ProcessState::Stopped  => {
+                return Ok(true);
+            }
+            ProcessState::PermissionDenied(_) => {
+                return Err(anyhow!("permission denied"));
+            }
+            _ => (),
+        }
     }
+
+    Ok(false)
 }
 
 /// Checks to see if a process is alive/accessible.  Returns true if the process is still

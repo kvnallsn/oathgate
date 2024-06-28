@@ -4,10 +4,12 @@ mod bridge;
 mod shard;
 mod template;
 
-use std::fmt::Display;
+use std::{borrow::Cow, fmt::Display, time::Duration};
 
 use clap::{Args, ValueEnum};
 use console::style;
+use dialoguer::Confirm;
+use indicatif::ProgressBar;
 use uuid::Uuid;
 
 use crate::{database::log::LogEntry, logger::LogLevel, State};
@@ -140,4 +142,25 @@ pub(crate) fn print_logs(state: &State, id: Uuid, format: LogFormat) -> anyhow::
     }
 
     Ok(())
+}
+
+/// Prompts the user to confirm an action if the auto-confirm flag was not set.  Returns true if
+/// the user accepted/agreed to the prompt, false in all other cases.
+///
+/// ### Arguments
+/// * `state` - Application state
+/// * `prompt` - Prompt to display
+pub(crate) fn confirm<S: Into<String>>(state: &State, prompt: S) -> anyhow::Result<bool> {
+    Ok(state.skip_confirm() || Confirm::new().with_prompt(prompt).interact()?)
+}
+
+/// Creates a new indefinite spinner to show unbound progress
+///
+/// ### Arguments
+/// * `msg` - Message to display next to spinner
+pub(crate) fn spinner<S: Into<Cow<'static, str>>>(msg: S) -> ProgressBar {
+    let bar = ProgressBar::new_spinner();
+    bar.enable_steady_tick(Duration::from_millis(100));
+    bar.set_message(msg);
+    bar
 }

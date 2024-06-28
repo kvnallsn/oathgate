@@ -14,10 +14,8 @@ use anyhow::Context;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-use crate::database::{log::LogEntry, shard::Shard};
 
 pub use self::device::{Device, DeviceType};
-use self::shard::ShardTemplate;
 
 /// Provides access to the database used to track bridges, etc.
 ///

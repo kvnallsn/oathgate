@@ -158,10 +158,15 @@ fn start_bridge(state: &State, name: String, pcap: Option<PathBuf>) -> anyhow::R
 /// * `state` - Application state
 /// * `name` - Name of bridge to stop
 fn stop_bridge(state: &State, name: String) -> anyhow::Result<()> {
+    if !super::confirm(state, "Stop bridge?")? {
+        println!("cancelled");
+        return Ok(());
+    }
+
     let mut device = get_bridge(state, &name)?;
 
     match device.status() {
-        ProcessState::Running(pid) => match process::stop(state, pid, "Stop device")? {
+        ProcessState::Running(pid) => match process::stop(pid)? {
             true => {
                 device.set_stopped();
                 device.save(state.db())?;
@@ -202,10 +207,15 @@ fn print_logs(state: &State, name: String, format: LogFormat) -> anyhow::Result<
 /// * `state` - Application state
 /// * `name` - Name of bridge to delete
 fn delete_bridge(state: &State, name: String) -> anyhow::Result<()> {
+    if !super::confirm(state, "Stop bridge?")? {
+        println!("cancelled");
+        return Ok(());
+    }
+
     let mut device = get_bridge(state, &name)?;
 
     match device.status() {
-        ProcessState::Running(pid) => match process::stop(state, pid, "Stop device?")? {
+        ProcessState::Running(pid) => match process::stop(pid)? {
             true => {
                 device.set_stopped();
                 device.save(state.db())?;

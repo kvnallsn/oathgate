@@ -136,7 +136,7 @@ fn run_ui(sock: RawFd) -> anyhow::Result<()> {
     let mut bytes: [u8; 8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
     // get the terminal size
-    if let Err(error) = terminal::size()
+    if let Err(_error) = terminal::size()
         .context("unable to get terminal size")
         .and_then(|(cols, rows)| resize_pty(sock, rows, cols, &mut bytes))
         .context("resize_pty error")
@@ -194,7 +194,7 @@ fn run_ui(sock: RawFd) -> anyhow::Result<()> {
                     bytes[1] = szb[0];
                     bytes[2] = szb[1];
 
-                    let sz = socket::send(sock, &bytes[0..(sz + 3)], MsgFlags::MSG_DONTWAIT)?;
+                    let _sz = socket::send(sock, &bytes[0..(sz + 3)], MsgFlags::MSG_DONTWAIT)?;
                 }
             }
             Event::Resize(cols, rows) => resize_pty(sock, rows, cols, &mut bytes)?,
