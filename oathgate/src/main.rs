@@ -62,6 +62,9 @@ pub enum Command {
         #[clap(subcommand)]
         command: TemplateCommand,
     },
+
+    /// Print status of entire system
+    Status,
 }
 
 pub struct State {
@@ -199,6 +202,17 @@ fn main() -> anyhow::Result<()> {
             Command::Bridge { command } => command.execute(&state)?,
             Command::Shard { command } => command.execute(&state)?,
             Command::Template { command } => command.execute(&state)?,
+            Command::Status => {
+                println!("Bridges");
+                self::cmd::BridgeCommand::List.execute(&state)?;
+
+                println!("\nShards");
+                self::cmd::ShardCommand::List.execute(&state)?;
+
+                println!("\nTemplates");
+                self::cmd::TemplateCommand::List.execute(&state)?;
+
+            },
         }
 
         Ok::<(), anyhow::Error>(())
