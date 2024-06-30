@@ -4,14 +4,13 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Context};
 use clap::Subcommand;
-use dialoguer::Confirm;
 use oathgate_bridge::{BridgeBuilder, BridgeConfig};
 
 use crate::{
     database::{Device, DeviceType},
     fork::Forker,
     logger::LogLevel,
-    process::{self, ProcessState}, State,
+    State,
 };
 
 use super::LogFormat;
@@ -67,6 +66,8 @@ pub enum BridgeCommand {
         /// Name of bridge to delete
         name: String,
     },
+
+    Test,
 }
 
 impl BridgeCommand {
@@ -79,6 +80,12 @@ impl BridgeCommand {
             Self::Logs { name, format } => print_logs(state, name, format),
             Self::Stop { name } => stop_bridge(state, name),
             Self::Delete { name } => delete_bridge(state, name),
+            Self::Test => {
+                let bar = super::spinner("testing spinner");
+                std::thread::sleep(std::time::Duration::from_secs(7));
+                bar.finish();
+                Ok(())
+            }
         };
 
         res.context("failed to execute bridge command")?;
@@ -116,7 +123,9 @@ fn create_bridge(state: &State, config: PathBuf, name: Option<String>) -> anyhow
 
     let cfg = BridgeConfig::load(&config).context("failed to parse bridge config")?;
     let device = Device::new(state.ctx(), &name, DeviceType::Bridge, &cfg);
-    device.save(state.db()).context("failed to insert bridge into database")?;
+    device
+        .save(state.db())
+        .context("failed to insert bridge into database")?;
 
     Ok(())
 }
@@ -129,6 +138,8 @@ fn create_bridge(state: &State, config: PathBuf, name: Option<String>) -> anyhow
 /// * `name` - Name of bridge (or None to generate one)
 /// * `pcap` - Path to file to save pcap (or None to disable pcap)
 fn start_bridge(state: &State, name: String, pcap: Option<PathBuf>) -> anyhow::Result<()> {
+    let bar = super::spinner("starting network");
+
     let mut device = get_bridge(state, &name)?;
 
     let config: BridgeConfig = device.config()?;
@@ -149,6 +160,8 @@ fn start_bridge(state: &State, name: String, pcap: Option<PathBuf>) -> anyhow::R
         .save(state.db())
         .context("unable to save device in database")?;
 
+    bar.finish_with_message("network started");
+
     Ok(())
 }
 
@@ -158,24 +171,14 @@ fn start_bridge(state: &State, name: String, pcap: Option<PathBuf>) -> anyhow::R
 /// * `state` - Application state
 /// * `name` - Name of bridge to stop
 fn stop_bridge(state: &State, name: String) -> anyhow::Result<()> {
-    if !super::confirm(state, "Stop bridge?")? {
-        println!("cancelled");
-        return Ok(());
-    }
-
     let mut device = get_bridge(state, &name)?;
 
-    match device.status() {
-        ProcessState::Running(pid) => match process::stop(pid)? {
-            true => {
-                device.set_stopped();
-                device.save(state.db())?;
-                println!("stopped device");
-            }
-            false => println!("operation cancelled"),
-        }
-        _ => (),
-    }
+    super::confirm(state, "Stop bridge?")?;
+
+    let bar = super::spinner("stopping network");
+    device.stop()?;
+    device.save(state.db())?;
+    bar.finish_with_message("network stopped");
 
     Ok(())
 }
@@ -207,37 +210,16 @@ fn print_logs(state: &State, name: String, format: LogFormat) -> anyhow::Result<
 /// * `state` - Application state
 /// * `name` - Name of bridge to delete
 fn delete_bridge(state: &State, name: String) -> anyhow::Result<()> {
-    if !super::confirm(state, "Stop bridge?")? {
-        println!("cancelled");
-        return Ok(());
-    }
-
     let mut device = get_bridge(state, &name)?;
-
-    match device.status() {
-        ProcessState::Running(pid) => match process::stop(pid)? {
-            true => {
-                device.set_stopped();
-                device.save(state.db())?;
-                println!("stopped device");
-            }
-            false => {
-                println!("operation cancelled");
-                return Ok(());
-            }
-        },
-        _ => (),
+    if device.is_running() {
+        super::confirm(state, "Stop bridge?")?;
+        device.stop()?;
+        device.save(state.db())?;
     }
 
-    let confirmation =
-        state.skip_confirm() || Confirm::new().with_prompt("Delete device?").interact()?;
-
-    if confirmation {
-        device.delete(state.db())?;
-        println!("delete device");
-    } else {
-        println!("operation cancelled");
-    }
+    super::confirm(state, "Delete bridge?")?;
+    device.delete(state.db())?;
+    println!("delete device");
 
     Ok(())
 }

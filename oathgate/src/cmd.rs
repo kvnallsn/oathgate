@@ -6,10 +6,11 @@ mod template;
 
 use std::{borrow::Cow, fmt::Display, time::Duration};
 
+use anyhow::anyhow;
 use clap::{Args, ValueEnum};
 use console::style;
 use dialoguer::Confirm;
-use indicatif::ProgressBar;
+use indicatif::{ProgressBar, ProgressStyle};
 use uuid::Uuid;
 
 use crate::{database::log::LogEntry, logger::LogLevel, State};
@@ -150,8 +151,11 @@ pub(crate) fn print_logs(state: &State, id: Uuid, format: LogFormat) -> anyhow::
 /// ### Arguments
 /// * `state` - Application state
 /// * `prompt` - Prompt to display
-pub(crate) fn confirm<S: Into<String>>(state: &State, prompt: S) -> anyhow::Result<bool> {
-    Ok(state.skip_confirm() || Confirm::new().with_prompt(prompt).interact()?)
+pub(crate) fn confirm<S: Into<String>>(state: &State, prompt: S) -> anyhow::Result<()> {
+    match state.skip_confirm() || Confirm::new().with_prompt(prompt).interact()? {
+        true => Ok(()),
+        false => Err(anyhow!("user cancelled operation")),
+    }
 }
 
 /// Creates a new indefinite spinner to show unbound progress
@@ -159,8 +163,19 @@ pub(crate) fn confirm<S: Into<String>>(state: &State, prompt: S) -> anyhow::Resu
 /// ### Arguments
 /// * `msg` - Message to display next to spinner
 pub(crate) fn spinner<S: Into<Cow<'static, str>>>(msg: S) -> ProgressBar {
+    let style = ProgressStyle::with_template("{spinner:.blue} {msg}").unwrap();
+    let style = style.tick_strings(&["\u{25C9}", "\u{25CB}", "\u{25C9}"]);
+
     let bar = ProgressBar::new_spinner();
-    bar.enable_steady_tick(Duration::from_millis(100));
+    bar.enable_steady_tick(Duration::from_millis(500));
     bar.set_message(msg);
+    bar.set_style(style);
     bar
+}
+
+/// Prints a warning message to the terminal
+pub(crate) fn warning<S: Into<Cow<'static, str>>>(msg: S) {
+    let style = console::Style::new().yellow();
+    let msg = style.apply_to(msg.into());
+    println!("{msg}");
 }

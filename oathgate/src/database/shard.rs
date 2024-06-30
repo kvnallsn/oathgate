@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use rand::RngCore;
 use rusqlite::{params, OptionalExtension, Row};
 use uuid::{ClockSequence, Timestamp, Uuid};
@@ -230,6 +230,20 @@ impl Shard {
             conn.execute("DELETE FROM shards WHERE id = ?1", (&self.id,))?;
             Ok(())
         })?;
+
+        Ok(())
+    }
+
+    /// Removes all shard files from disk and deletes the entry in the database
+    ///
+    /// ### Arguments
+    /// * `state` - Appliation state
+    pub fn purge(self, state: &State) -> anyhow::Result<()> {
+        self.delete(state.db())?;
+
+        let dir = self.dir(state);
+        std::fs::remove_dir_all(dir)?;
+
         Ok(())
     }
 
@@ -248,9 +262,9 @@ impl Shard {
         self.cid
     }
 
-    /// Returns the current state of this process
-    pub fn state(&self) -> ProcessState {
-        self.state
+    /// Returns true if this shard is currently running
+    pub fn is_running(&self) -> bool {
+        matches!(self.state, ProcessState::Running(_))
     }
 
     /// Updates the state of this process to running
@@ -264,6 +278,23 @@ impl Shard {
     /// Updates the state of this process to stopped
     pub fn set_stopped(&mut self) {
         self.state = ProcessState::Stopped;
+    }
+
+    /// Stops a running shard
+    pub fn stop(&mut self) -> anyhow::Result<()> {
+        match self.state {
+            ProcessState::Running(pid) => {
+                process::stop(pid)?;
+                self.set_stopped();
+            },
+            ProcessState::Dead(_) => self.set_stopped(),
+            ProcessState::Stopped => (),
+            ProcessState::PermissionDenied(_) => {
+                return Err(anyhow!("unable to stop shard: permission denied"));
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the path to the shard's directory (based on the base path)

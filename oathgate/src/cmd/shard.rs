@@ -9,7 +9,6 @@ use oathgate_runner::{config::Config, hypervisor::Hypervisor};
 use crate::{
     database::{shard::Shard, Device},
     fork::Forker,
-    process::{self, ProcessState},
     State,
 };
 
@@ -24,7 +23,6 @@ pub enum ShardCommand {
         bridge: String,
 
         /// Name of the (deployed) virtual machine / shard
-        #[clap(short, long)]
         name: String,
     },
 
@@ -56,6 +54,12 @@ pub enum ShardCommand {
         /// Name of the shard to stop
         name: String,
     },
+
+    /// Deletes a stopped shard (unrecoverable!)
+    Delete {
+        /// Name of the shard to delete
+        name: String,
+    }
 }
 
 impl ShardCommand {
@@ -69,15 +73,19 @@ impl ShardCommand {
             Self::Logs { name, format } => print_logs(state, name, format)?,
             Self::Attach { name, port } => attach_shard(state, name, port)?,
             Self::Stop { name } => stop_shard(state, name)?,
+            Self::Delete { name } => delete_shard(state, name)?,
         }
         Ok(())
     }
 }
 
-fn run_shard(state: &State, bridge: String, name: String) -> anyhow::Result<()> {
-    let bar = super::spinner(format!("starting shard {name}"));
+fn get_shard(state: &State, name: &str) -> anyhow::Result<Shard> {
+    Ok(Shard::get(state.db(), &name)?.ok_or_else(|| anyhow!("shard not found"))?)
+}
 
-    let mut shard = Shard::get(state.db(), &name)?.ok_or_else(|| anyhow!("shard not found"))?;
+fn run_shard(state: &State, bridge: String, name: String) -> anyhow::Result<()> {
+    let mut shard = get_shard(state, &name)?;
+    let bar = super::spinner(format!("starting shard {name}"));
 
     let bridge =
         Device::get(state.db(), &bridge)?.ok_or_else(|| anyhow!("unknown bridge: {bridge}"))?;
@@ -120,42 +128,38 @@ fn list_shards(state: &State) -> anyhow::Result<()> {
 }
 
 fn stop_shard(state: &State, name: String) -> anyhow::Result<()> {
-    if !super::confirm(state, "Stop shard?")? {
-        println!("cancelled");
-        return Ok(());
-    }
+    let mut shard = get_shard(state, &name)?;
+
+    super::confirm(state, "Stop shard?")?;
 
     let bar = super::spinner(format!("stopping shard {name}"));
+    shard.stop()?;
+    shard.save(state.db())?;
+    bar.finish_with_message("shard stopped");
 
-    match Shard::get(state.db(), &name)? {
-        None => bar.finish_with_message("shard not found"),
-        Some(mut shard) => match shard.state() {
-            ProcessState::Running(pid) => match process::stop(pid)? {
-                true => {
-                    shard.set_stopped();
-                    shard.save(state.db())?;
-                    bar.finish_with_message("shard stopped");
-                }
-                false => bar.finish_with_message("unable to stop shard"),
-            },
-            ProcessState::Dead(_) => {
-                shard.set_stopped();
-                shard.save(state.db())?;
-                bar.finish_with_message("shard stopped");
-            }
-            ProcessState::PermissionDenied(_) => bar.finish_with_message("permission denied"),
-            ProcessState::Stopped => bar.finish_with_message("shard not running"),
-        },
+    Ok(())
+}
+
+fn delete_shard(state: &State, name: String) -> anyhow::Result<()> {
+    let shard = get_shard(state, &name)?;
+
+    if shard.is_running() {
+        return Err(anyhow!("shard is running. stop shard before deleting"));
     }
+
+    super::warning("WARNING: this action will delete ALL shard files and is unrecoverable!");
+    super::confirm(state, "Delete shard?")?;
+
+    let bar = super::spinner(format!("deleting shard {name}"));
+    shard.purge(state)?;
+    bar.finish_with_message("shard deleted");
 
     Ok(())
 }
 
 fn attach_shard(state: &State, name: String, port: u32) -> anyhow::Result<()> {
-    match Shard::get(state.db(), &name)? {
-        None => println!("shard '{name}' not found!"),
-        Some(shard) => fabrial::run(shard.cid(), port)?,
-    }
+    let shard = get_shard(state, &name)?;
+    fabrial::run(shard.cid(), port)?;
     Ok(())
 }
 
@@ -166,7 +170,7 @@ fn attach_shard(state: &State, name: String, port: u32) -> anyhow::Result<()> {
 /// * `name` - Name of device
 /// * `format` - Format to print logs (json, pretty, etc.)
 fn print_logs(state: &State, name: String, format: LogFormat) -> anyhow::Result<()> {
-    let device = Shard::get(state.db(), &name)?.ok_or_else(|| anyhow!("shard not found"))?;
-    super::print_logs(state, device.id(), format)?;
+    let shard = get_shard(state, &name)?;
+    super::print_logs(state, shard.id(), format)?;
     Ok(())
 }

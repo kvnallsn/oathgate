@@ -2,7 +2,7 @@
 
 use std::{fmt::Display, path::PathBuf};
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use rusqlite::{
     params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
@@ -150,11 +150,6 @@ impl Device {
         self.name.as_str()
     }
 
-    /// Returns the status of this process
-    pub fn status(&self) -> ProcessState {
-        self.state
-    }
-
     /// Returns true if this device is running (and not dead/zombie/hanging)
     pub fn is_running(&self) -> bool {
         match self.state {
@@ -171,6 +166,23 @@ impl Device {
     /// Marks this device as stopped
     pub fn set_stopped(&mut self) {
         self.state = ProcessState::Stopped;
+    }
+
+    /// Stops a running device
+    pub fn stop(&mut self) -> anyhow::Result<()> {
+        match self.state {
+            ProcessState::Running(pid) => {
+                process::stop(pid)?;
+                self.set_stopped();
+            },
+            ProcessState::Dead(_) => self.set_stopped(),
+            ProcessState::Stopped => (),
+            ProcessState::PermissionDenied(_) => {
+                return Err(anyhow!("unable to stop device: permission denied"));
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the path to the unix domain socket connected to this process

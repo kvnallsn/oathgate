@@ -18,12 +18,24 @@ pub enum ProcessState {
 ///
 /// ### Arguments
 /// * `pid` - Process id of process to stop
-pub fn stop(pid: i32) -> anyhow::Result<bool> {
+pub fn stop(pid: i32) -> anyhow::Result<()> {
     // send a sigterm to the process
     let pid = Pid::from_raw(pid);
 
-    for i in 0..4 {
+    let mut i = 0;
+    loop {
+        match check(pid.as_raw())? {
+            ProcessState::Dead(_) | ProcessState::Stopped  => {
+                return Ok(());
+            }
+            ProcessState::PermissionDenied(_) => {
+                return Err(anyhow!("permission denied"));
+            }
+            _ => (),
+        }
+
         match i {
+            4 => break,
             3 => nix::sys::signal::kill(pid, Signal::SIGKILL)
                 .with_context(|| format!("unable to send sigkill to process {pid}"))?,
             _ => nix::sys::signal::kill(pid, Signal::SIGTERM)
@@ -32,18 +44,10 @@ pub fn stop(pid: i32) -> anyhow::Result<bool> {
 
         std::thread::sleep(std::time::Duration::from_millis(1_000));
 
-        match check(pid.as_raw())? {
-            ProcessState::Dead(_) | ProcessState::Stopped  => {
-                return Ok(true);
-            }
-            ProcessState::PermissionDenied(_) => {
-                return Err(anyhow!("permission denied"));
-            }
-            _ => (),
-        }
+        i += 1;
     }
 
-    Ok(false)
+    Err(anyhow!("process did not respond to sigterm or sigkill"))
 }
 
 /// Checks to see if a process is alive/accessible.  Returns true if the process is still
