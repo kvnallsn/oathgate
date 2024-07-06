@@ -1,10 +1,11 @@
 //! Command line interface and options
 
 mod bridge;
+mod kernel;
 mod shard;
 mod template;
 
-use std::{borrow::Cow, fmt::Display, time::Duration};
+use std::{borrow::Cow, fmt::Display, time::Duration, io::Read};
 
 use anyhow::anyhow;
 use clap::{Args, ValueEnum};
@@ -15,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{database::log::LogEntry, logger::LogLevel, State};
 
-pub use self::{bridge::BridgeCommand, shard::ShardCommand, template::TemplateCommand};
+pub use self::{bridge::BridgeCommand, shard::ShardCommand, template::TemplateCommand, kernel::KernelCommand};
 
 #[derive(Args, Debug)]
 pub struct LogSettings {
@@ -120,7 +121,6 @@ pub fn draw_table<T: AsTable>(rows: &[T]) {
     term.flush().ok();
 }
 
-
 /// Prints logs to the terminal for the corresponding id
 ///
 /// ### Arguments
@@ -178,4 +178,29 @@ pub(crate) fn warning<S: Into<Cow<'static, str>>>(msg: S) {
     let style = console::Style::new().yellow();
     let msg = style.apply_to(msg.into());
     println!("{msg}");
+}
+
+/// Hashes the content of a file
+pub(crate) fn hash_file<R: Read>(rdr: &mut R) -> anyhow::Result<String> {
+    use sha3::{Shake128, digest::{Update, ExtendableOutput, XofReader}};
+
+    const BUF_SZ: usize = 4096;
+
+    let mut buf = [0u8; BUF_SZ];
+    let mut hasher = Shake128::default();
+
+    loop {
+        let sz = rdr.read(&mut buf)?;
+        hasher.update(&buf[..sz]);
+
+        if sz < BUF_SZ {
+            break;
+        }
+    }
+
+    let mut output = [0u8; 6];
+    let mut xof = hasher.finalize_xof();
+    XofReader::read(&mut xof, &mut output);
+
+    Ok(base32::encode(base32::Alphabet::Crockford, &output))
 }

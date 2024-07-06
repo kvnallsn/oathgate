@@ -199,7 +199,7 @@ impl Device {
     ///
     /// ### Arguments
     /// * `row` - Row returned from database
-    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         let pid: Option<i32> = row.get(1)?;
         let state = match pid {
             Some(pid) => process::check(pid).unwrap_or(ProcessState::Dead(pid)),

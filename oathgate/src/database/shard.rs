@@ -3,12 +3,15 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context};
+use oathgate_runner::config::MachineConfig;
 use rand::RngCore;
 use rusqlite::{params, OptionalExtension, Row};
 use uuid::{ClockSequence, Timestamp, Uuid};
 
 use crate::{
-    cmd::AsTable, process::{self, ProcessState}, State
+    cmd::AsTable,
+    process::{self, ProcessState},
+    State,
 };
 
 use super::{Database, Device};
@@ -21,6 +24,15 @@ pub struct ShardTemplate {
 
     /// Unique name of the shard template
     name: String,
+
+    /// Qemu - type of machine (i.e., q35)
+    machine: String,
+
+    /// Amount of memory, in mb
+    memory: u64,
+
+    /// Kernel command line arguments
+    kargs: String,
 }
 
 /// A shard is a representation of a VM stored in the database
@@ -45,14 +57,17 @@ impl ShardTemplate {
     /// ### Arguments
     /// * `ctx` - Timestamp context used to generate a UUIDv7
     /// * `name` - Name of this shard template
-    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>>(
-        ctx: C,
-        name: S,
-    ) -> Self {
+    pub fn new<S1, S2, S3, C>(ctx: C, name: S1, machine: S2, memory: u64, kargs: S3) -> Self where S1: Into<String>, S2: Into<String>, S3: Into<String>, C: ClockSequence<Output = u16> {
         let id = Uuid::new_v7(Timestamp::now(&ctx));
         let name = name.into();
+        let machine = machine.into();
+        let kargs = kargs.into();
 
-        Self { id, name }
+        Self { id, name, machine, memory, kargs }
+    }
+
+    pub fn from_machine<S: Into<String>, C: ClockSequence<Output = u16>>(ctx: C, name: S,machine: MachineConfig) -> Self {
+        Self::new(ctx, name, machine.cpu, 512, "")
     }
 
     /// Returns the shard template with the provided name
@@ -60,7 +75,7 @@ impl ShardTemplate {
         let name = name.as_ref();
 
         let template = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name FROM shard_templates WHERE name = ?1")?;
+            let mut stmt = conn.prepare("SELECT id, name, machine, memory, kargs FROM shard_templates WHERE name = ?1")?;
             let template = stmt.query_row(params![name], Self::from_row)?;
             Ok(template)
         })?;
@@ -74,7 +89,7 @@ impl ShardTemplate {
     /// * `db` - Database connection
     pub fn get_all(db: &Database) -> anyhow::Result<Vec<Self>> {
         let templates = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name FROM shard_templates")?;
+            let mut stmt = conn.prepare("SELECT id, name, machine, memory, kargs FROM shard_templates")?;
             let templates = stmt
                 .query_map(params![], Self::from_row)?
                 .filter_map(|r| r.ok())
@@ -91,13 +106,16 @@ impl ShardTemplate {
         db.transaction(|conn| {
             conn.execute(
                 "INSERT INTO
-                    shard_templates (id, name)
+                    shard_templates (id, name, machine, memory, kargs)
                  VALUES
-                    (?1, ?2)
+                    (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name
+                    name = excluded.name,
+                    machine = excluded.machine,
+                    memory = excluded.memory,
+                    kargs = excluded.kargs
                 ",
-                (&self.id, &self.name)
+                (&self.id, &self.name, &self.machine, self.memory, &self.kargs),
             )?;
 
             Ok(())
@@ -117,7 +135,11 @@ impl ShardTemplate {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         let id: Uuid = row.get(0)?;
         let name: String = row.get(1)?;
-        Ok(Self { id, name })
+        let machine: String = row.get(2)?;
+        let memory: u64 = row.get(3)?;
+        let kargs: String = row.get(4)?;
+
+        Ok(Self { id, name, machine, memory, kargs })
     }
 }
 
@@ -128,10 +150,7 @@ impl Shard {
     /// * `ctx` - Timestamp context used to generate a UUIDv7
     /// * `cid` - Context Id used with vhost-vsock
     /// * `name` - Name of this shard
-    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>>(
-        ctx: C,
-        name: S,
-    ) -> Self {
+    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>>(ctx: C, name: S) -> Self {
         let mut rng = rand::thread_rng();
         let id = Uuid::new_v7(Timestamp::now(&ctx));
         let cid = rng.next_u32();
@@ -172,11 +191,20 @@ impl Shard {
     /// ### Argumnets
     /// * `db` - Database connection
     /// * `dev` - Device to associate with shard
-    pub fn add_device_ref(&self, db: &Database, dev: &Device) -> anyhow::Result<()> {
+    pub fn add_device_ref(
+        &self,
+        db: &Database,
+        dev: &Device,
+        interface: &str,
+    ) -> anyhow::Result<()> {
         db.transaction(|conn| {
             conn.execute(
-                "INSERT INTO shard_devices (device_id, shard_id) VALUES (?1, ?2) ON CONFLICT(device_id, shard_id) DO NOTHING",
-                (dev.id(), &self.id)
+                "INSERT INTO
+                    shard_devices (device_id, shard_id, interface)
+                VALUES
+                    (?1, ?2, ?3)
+                ON CONFLICT(device_id, shard_id) DO NOTHING",
+                (dev.id(), &self.id, interface),
             )?;
 
             Ok(())
@@ -219,6 +247,30 @@ impl Shard {
         })?;
 
         Ok(shards)
+    }
+
+    pub fn networks(&self, db: &Database) -> anyhow::Result<Vec<Device>> {
+        let networks = db.transaction(|conn| {
+            let mut stmt = conn.prepare(
+                "
+                SELECT
+                    d.id, d.pid, d.name, d.device, d.config
+                FROM devices AS d
+                INNER JOIN shard_devices ON
+                    shard_devices.device_id = d.id
+                WHERE
+                    shard_devices.shard_id = ?1",
+            )?;
+
+            let devices = stmt
+                .query_map(params![self.id()], Device::from_row)?
+                .filter_map(|dev| dev.ok())
+                .collect::<Vec<_>>();
+
+            Ok(devices)
+        })?;
+
+        Ok(networks)
     }
 
     /// Deletes this shard from the database
@@ -286,7 +338,7 @@ impl Shard {
             ProcessState::Running(pid) => {
                 process::stop(pid)?;
                 self.set_stopped();
-            },
+            }
             ProcessState::Dead(_) => self.set_stopped(),
             ProcessState::Stopped => (),
             ProcessState::PermissionDenied(_) => {

@@ -4,7 +4,8 @@ use rusqlite::Connection;
 
 /// Runs the initial migration
 pub fn version_000(conn: &Connection) -> anyhow::Result<()> {
-    conn.execute_batch(r#"
+    conn.execute_batch(
+        r#"
         CREATE TABLE IF NOT EXISTS logs (
             id      BLOB PRIMARY KEY,
             device  BLOB,
@@ -24,9 +25,25 @@ pub fn version_000(conn: &Connection) -> anyhow::Result<()> {
             config  JSON NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS kernels (
+            id      BLOB PRIMARY KEY,
+            hash    TEXT NOT NULL,
+            name    TEXT NOT NULL,
+            version TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS shard_template_disks (
+            id      BLOB PRIMARY KEY,
+            name    TEXT NOT NULL,
+            format  TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS shard_templates (
             id      BLOB PRIMARY KEY,
-            name    TEXT NOT NULL
+            name    TEXT NOT NULL,
+            machine TEXT NOT NULL,
+            memory  INTEGER NOT NULL,
+            kargs   TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS shards (
@@ -39,9 +56,11 @@ pub fn version_000(conn: &Connection) -> anyhow::Result<()> {
         CREATE TABLE IF NOT EXISTS shard_devices (
             device_id   BLOB REFERENCES devices(id),
             shard_id    BLOB REFERENCES shards(id),
+            interface   TEXT NOT NULL,
             PRIMARY KEY (device_id, shard_id)
         );
-    "#)?;
+    "#,
+    )?;
 
     Ok(())
 }

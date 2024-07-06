@@ -9,7 +9,7 @@ pub(crate) mod process;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use cmd::{BridgeCommand, ShardCommand, TemplateCommand};
+use cmd::{BridgeCommand, KernelCommand, ShardCommand, TemplateCommand};
 use console::style;
 use logger::SqliteSubscriber;
 use uuid::{NoContext, Uuid};
@@ -49,6 +49,12 @@ pub enum Command {
     Bridge {
         #[clap(subcommand)]
         command: BridgeCommand,
+    },
+
+    /// Manage and install Linux kernels
+    Kernel {
+        #[clap(subcommand)]
+        command: KernelCommand,
     },
 
     /// Control virtual machines conneted to a bridge
@@ -178,6 +184,13 @@ impl State {
         self.subdir("shards")
     }
 
+    /// Returns he path to the kernels directory
+    ///
+    /// The kernels directory contains the available kernels that can be used to start a shard
+    pub fn kernel_dir(&self) -> PathBuf {
+        self.subdir("kernels")
+    }
+
     /// Returns the path to a specific subdirectory relative to the base path
     ///
     /// ### Arguments
@@ -200,6 +213,7 @@ fn main() -> anyhow::Result<()> {
 
         match opts.command {
             Command::Bridge { command } => command.execute(&state)?,
+            Command::Kernel { command } => command.execute(&state)?,
             Command::Shard { command } => command.execute(&state)?,
             Command::Template { command } => command.execute(&state)?,
             Command::Status => {
