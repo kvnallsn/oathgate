@@ -1,6 +1,7 @@
 //! Database related functions
 
 pub(crate) mod device;
+pub(crate) mod image;
 pub(crate) mod kernel;
 pub(crate) mod log;
 pub(crate) mod migration;

@@ -27,9 +27,16 @@ pub fn version_000(conn: &Connection) -> anyhow::Result<()> {
 
         CREATE TABLE IF NOT EXISTS kernels (
             id      BLOB PRIMARY KEY,
-            hash    TEXT NOT NULL,
+            hash    TEXT NOT NULL UNIQUE,
             name    TEXT NOT NULL,
             version TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS images (
+            id      BLOB PRIMARY KEY,
+            hash    TEXT NOT NULL UNIQUE,
+            name    TEXT NOT NULL,
+            format  TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS shard_template_disks (

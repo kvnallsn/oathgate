@@ -6,10 +6,10 @@ pub(crate) mod fork;
 pub(crate) mod logger;
 pub(crate) mod process;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
-use cmd::{BridgeCommand, KernelCommand, ShardCommand, TemplateCommand};
+use cmd::{BridgeCommand, ImageCommand, KernelCommand, ShardCommand, TemplateCommand};
 use console::style;
 use logger::SqliteSubscriber;
 use uuid::{NoContext, Uuid};
@@ -55,6 +55,12 @@ pub enum Command {
     Kernel {
         #[clap(subcommand)]
         command: KernelCommand,
+    },
+
+    /// Manage and install disk images
+    Image {
+        #[clap(subcommand)]
+        command: ImageCommand,
     },
 
     /// Control virtual machines conneted to a bridge
@@ -162,6 +168,17 @@ impl State {
         names.next().unwrap()
     }
 
+    pub fn get_mime<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<String> {
+        use magic::{Cookie, cookie::Flags};
+
+        let cookie = Cookie::open(Flags::ERROR | Flags::MIME_TYPE)?;
+        let database = Default::default();
+        let cookie = cookie.load(&database).unwrap();
+        let mime = cookie.file(path)?;
+
+        Ok(mime)
+    }
+
     /// Returns the path the network directory based on the base path
     ///
     /// The network directory stores the various files (such as unix domain sockets) needed
@@ -184,11 +201,18 @@ impl State {
         self.subdir("shards")
     }
 
-    /// Returns he path to the kernels directory
+    /// Returns the path to the kernels directory
     ///
     /// The kernels directory contains the available kernels that can be used to start a shard
     pub fn kernel_dir(&self) -> PathBuf {
         self.subdir("kernels")
+    }
+
+    /// Returns the path to the images directory
+    ///
+    /// The images directory contains the available disk images that can be used to start a shard
+    pub fn image_dir(&self) -> PathBuf {
+        self.subdir("images")
     }
 
     /// Returns the path to a specific subdirectory relative to the base path
@@ -214,6 +238,7 @@ fn main() -> anyhow::Result<()> {
         match opts.command {
             Command::Bridge { command } => command.execute(&state)?,
             Command::Kernel { command } => command.execute(&state)?,
+            Command::Image { command } => command.execute(&state)?,
             Command::Shard { command } => command.execute(&state)?,
             Command::Template { command } => command.execute(&state)?,
             Command::Status => {
@@ -225,8 +250,7 @@ fn main() -> anyhow::Result<()> {
 
                 println!("\nTemplates");
                 self::cmd::TemplateCommand::List.execute(&state)?;
-
-            },
+            }
         }
 
         Ok::<(), anyhow::Error>(())

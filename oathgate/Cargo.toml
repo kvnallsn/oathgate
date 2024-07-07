@@ -12,6 +12,8 @@ crossterm = "0.27"
 dialoguer = "0.11.0"
 flate2 = "1.0.30"
 indicatif = "0.17.8"
+magic = "0.16.2"
+memmap2 = "0.9.4"
 mio = { workspace = true }
 names = { version = "0.14.0", default-features = false }
 nix = { workspace = true }

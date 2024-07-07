@@ -1,22 +1,24 @@
 //! Command line interface and options
 
 mod bridge;
+mod image;
 mod kernel;
 mod shard;
 mod template;
 
-use std::{borrow::Cow, fmt::Display, time::Duration, io::Read};
+use std::{borrow::Cow, fmt::Display, fs::File, io::Read, time::Duration};
 
 use anyhow::anyhow;
 use clap::{Args, ValueEnum};
 use console::style;
 use dialoguer::Confirm;
 use indicatif::{ProgressBar, ProgressStyle};
+use memmap2::Mmap;
 use uuid::Uuid;
 
 use crate::{database::log::LogEntry, logger::LogLevel, State};
 
-pub use self::{bridge::BridgeCommand, shard::ShardCommand, template::TemplateCommand, kernel::KernelCommand};
+pub use self::{bridge::BridgeCommand, shard::ShardCommand, template::TemplateCommand, kernel::KernelCommand, image::ImageCommand};
 
 #[derive(Args, Debug)]
 pub struct LogSettings {
@@ -56,7 +58,8 @@ pub trait AsTable {
     fn as_table_row(&self, widths: &[usize]);
 
     fn print_field<D: Display>(&self, field: D, width: usize) {
-        print!(" {:width$} \u{2502}", field, width = width);
+        let field = field.to_string();
+        print!(" {:width$} \u{2502}", field)
     }
 }
 
@@ -181,21 +184,15 @@ pub(crate) fn warning<S: Into<Cow<'static, str>>>(msg: S) {
 }
 
 /// Hashes the content of a file
-pub(crate) fn hash_file<R: Read>(rdr: &mut R) -> anyhow::Result<String> {
+pub(crate) fn hash_file(f: &File) -> anyhow::Result<String> {
     use sha3::{Shake128, digest::{Update, ExtendableOutput, XofReader}};
 
-    const BUF_SZ: usize = 4096;
-
-    let mut buf = [0u8; BUF_SZ];
     let mut hasher = Shake128::default();
-
-    loop {
-        let sz = rdr.read(&mut buf)?;
-        hasher.update(&buf[..sz]);
-
-        if sz < BUF_SZ {
-            break;
-        }
+    let mmap = unsafe { Mmap::map(f)? };
+   
+    // hash up to 8M of data in 1K chunks
+    for chunk in mmap.chunks(1024).take(8192) {
+        hasher.update(&chunk);
     }
 
     let mut output = [0u8; 6];

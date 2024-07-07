@@ -1,6 +1,6 @@
 //! Manage and install linux kernels
 
-use std::{fs::File, io::Seek, path::{Path, PathBuf}};
+use std::{fs::File, path::{Path, PathBuf}};
 
 use clap::Subcommand;
 
@@ -76,7 +76,6 @@ pub fn kernel_install(
     // hash the file to generate a unique id
     let mut src = File::options().write(false).read(true).open(kernel)?;
     let hash_id = super::hash_file(&mut src)?;
-    src.seek(std::io::SeekFrom::Start(0))?;
 
     let kernel = Kernel::new(state.ctx(), hash_id, &name, &version);
 
