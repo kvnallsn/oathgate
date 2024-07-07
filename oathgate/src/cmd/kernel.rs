@@ -16,11 +16,21 @@ pub enum KernelCommand {
         /// Name of this kernel image
         #[clap(short, long)]
         name: Option<String>,
+
+        //// Set this kernel as the default kernel to use when starting shards
+        #[clap(long)]
+        default: bool,
     },
 
     /// List installed/available kernels
     #[clap(alias = "ls")]
     List,
+
+    /// Set a new kernel as the default kernel to use when starting shards
+    SetDefault {
+        /// Name of the kernel to set as default
+        name: String,
+    }
 }
 
 impl KernelCommand {
@@ -33,8 +43,10 @@ impl KernelCommand {
             Self::Install {
                 kernel,
                 name,
-            } => kernel_install(state, kernel, name)?,
+                default,
+            } => kernel_install(state, kernel, name, default)?,
             Self::List => kernel_list(state)?,
+            Self::SetDefault { name } => kernel_set_default(state, name)?,
         }
 
         Ok(())
@@ -49,12 +61,13 @@ impl KernelCommand {
 /// ### Arguments
 /// * `state` - Application state
 /// * `kernel` - Path to kernel to install on disk
-/// * `version` - Kernel version (i.e., 6.9.0-32)
 /// * `name` - Name to refer to this kernel by (or omitted to auto-generate)
+/// * `default` - True if this is the default kernel to use then deploying shards
 pub fn kernel_install(
     state: &State,
     kernel: PathBuf,
     name: Option<String>,
+    default: bool,
 ) -> anyhow::Result<()> {
     let name = name.unwrap_or_else(|| state.generate_name());
 
@@ -77,7 +90,7 @@ pub fn kernel_install(
     let mut src = File::options().write(false).read(true).open(kernel)?;
     let hash_id = super::hash_file(&mut src)?;
 
-    let kernel = Kernel::new(state.ctx(), hash_id, &name, &version);
+    let kernel = Kernel::new(state.ctx(), hash_id, &name, &version, default);
 
     let dst = state.kernel_dir().join(kernel.id_str()).with_extension("bin");
     let mut dst = File::options().write(true).create(true).append(false).open(dst)?;
@@ -99,6 +112,18 @@ pub fn kernel_list(state: &State) -> anyhow::Result<()> {
 
     super::draw_table(&kernels);
 
+    Ok(())
+}
+
+/// Sets the specified kernel as the default kernel selected when starting shards
+///
+/// ### Arguments
+/// * `state` - Application state
+/// * `name` - Name of kernel to set as the default
+pub fn kernel_set_default(state: &State, name: String) -> anyhow::Result<()> {
+    let mut kernel = Kernel::get(state.db(), name)?;
+    kernel.set_default();
+    kernel.save(state.db())?;
     Ok(())
 }
 

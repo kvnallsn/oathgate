@@ -4,9 +4,9 @@ mod bridge;
 mod image;
 mod kernel;
 mod shard;
-mod template;
+//mod template;
 
-use std::{borrow::Cow, fmt::Display, fs::File, io::Read, time::Duration};
+use std::{borrow::Cow, fmt::Display, fs::File, time::Duration};
 
 use anyhow::anyhow;
 use clap::{Args, ValueEnum};
@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::{database::log::LogEntry, logger::LogLevel, State};
 
-pub use self::{bridge::BridgeCommand, shard::ShardCommand, template::TemplateCommand, kernel::KernelCommand, image::ImageCommand};
+pub use self::{bridge::BridgeCommand, shard::ShardCommand, kernel::KernelCommand, image::ImageCommand};
 
 #[derive(Args, Debug)]
 pub struct LogSettings {

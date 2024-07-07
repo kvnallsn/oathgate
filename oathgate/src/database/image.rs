@@ -52,6 +52,24 @@ impl DiskImage {
         Self { id, hash, name, format }
     }
 
+    /// Retrieves a specific disk image from the database
+    ///
+    /// ### Arguments
+    /// * `db` - Database connection
+    /// * `name` - Name of disk image to retrieve
+    pub fn get<S: AsRef<str>>(db: &Database, name: S) -> anyhow::Result<Self> {
+        let name = name.as_ref();
+        let image = db.transaction(|conn| {
+            let mut stmt = conn.prepare("SELECT id, hash, name, format FROM images WHERE name = ?1")?;
+            let image = stmt
+                .query_row([name], Self::from_row)?;
+
+            Ok(image)
+        })?;
+
+        Ok(image)
+    }
+
     /// Retrieves all disk image records from the database
     ///
     /// ### Arguments
@@ -169,5 +187,11 @@ impl FromSql for DiskFormat {
             }
             _ => Err(FromSqlError::InvalidType)
         }
+    }
+}
+
+impl Display for DiskImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", &self.name, &self.format)
     }
 }

@@ -1,6 +1,6 @@
 //! Represents a device in the database
 
-use std::{fmt::Display, path::PathBuf};
+use std::{collections::HashSet, fmt::Display, path::PathBuf};
 
 use anyhow::{anyhow, Context};
 use rusqlite::{
@@ -126,6 +126,42 @@ impl Device {
         })?;
 
         Ok(devices)
+    }
+
+    /// Get multiple devices from the databases
+    ///
+    /// TODO: should there be a max network / get count?
+    ///
+    /// ### Arguments
+    /// * `db` - Reference to the database
+    /// * `names` - Names of networks to retrieve
+    pub fn get_many(db: &Database, names: &[String]) -> anyhow::Result<Vec<Device>> {
+        let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+        let devices = db.transaction(|conn| {
+            let mut stmt = conn.prepare(
+                &format!("SELECT id, pid, name, device, config FROM devices WHERE name IN ({placeholders})")
+            )?;
+
+            let devices = stmt
+                .query_map(rusqlite::params_from_iter(names.iter()), Self::from_row)?
+                .filter_map(|dev| dev.ok())
+                .collect::<Vec<_>>();
+
+            Ok(devices)
+        })?;
+
+        if devices.len() != names.len() {
+            let mut names = names.iter().map(|s| s.as_str()).collect::<HashSet<_>>();
+            for dev in &devices {
+                names.remove(dev.name());
+            }
+
+            let devices = names.into_iter().collect::<Vec<_>>().join(", ");
+            Err(anyhow!("unable to find the following devices: {devices}"))
+        } else {
+            Ok(devices)
+        }
     }
 
     /// Deletes this device from the database

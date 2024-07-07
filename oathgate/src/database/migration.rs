@@ -26,10 +26,11 @@ pub fn version_000(conn: &Connection) -> anyhow::Result<()> {
         );
 
         CREATE TABLE IF NOT EXISTS kernels (
-            id      BLOB PRIMARY KEY,
-            hash    TEXT NOT NULL UNIQUE,
-            name    TEXT NOT NULL,
-            version TEXT NOT NULL
+            id          BLOB PRIMARY KEY,
+            hash        TEXT NOT NULL UNIQUE,
+            name        TEXT NOT NULL,
+            version     TEXT NOT NULL,
+            is_default  INTEGER DEFAULT 0 CHECK(is_default IN (0, 1))
         );
 
         CREATE TABLE IF NOT EXISTS images (
@@ -66,6 +67,22 @@ pub fn version_000(conn: &Connection) -> anyhow::Result<()> {
             interface   TEXT NOT NULL,
             PRIMARY KEY (device_id, shard_id)
         );
+
+        CREATE TRIGGER IF NOT EXISTS enforce_kernel_default_insert
+        BEFORE INSERT ON kernels
+        FOR EACH ROW
+        WHEN NEW.is_default = 1
+        BEGIN
+            UPDATE kernels SET is_default = 0 WHERE is_default = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS enforce_kernel_default_update
+        BEFORE UPDATE OF is_default ON kernels
+        FOR EACH ROW
+        WHEN NEW.is_default = 1
+        BEGIN
+            UPDATE kernels SET is_default = 0 WHERE is_default = 1;
+        END;
     "#,
     )?;
 

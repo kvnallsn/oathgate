@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context};
-use oathgate_runner::config::MachineConfig;
 use rand::RngCore;
 use rusqlite::{params, OptionalExtension, Row};
 use uuid::{ClockSequence, Timestamp, Uuid};
@@ -15,25 +14,6 @@ use crate::{
 };
 
 use super::{Database, Device};
-
-/// A `ShardTemplate` references an archive of a shard that can be deployed
-#[derive(Debug)]
-pub struct ShardTemplate {
-    /// Unique id of the shard template
-    id: Uuid,
-
-    /// Unique name of the shard template
-    name: String,
-
-    /// Qemu - type of machine (i.e., q35)
-    machine: String,
-
-    /// Amount of memory, in mb
-    memory: u64,
-
-    /// Kernel command line arguments
-    kargs: String,
-}
 
 /// A shard is a representation of a VM stored in the database
 #[derive(Debug)]
@@ -51,97 +31,6 @@ pub struct Shard {
     state: ProcessState,
 }
 
-impl ShardTemplate {
-    /// Creates a new shard template from provided parameters
-    ///
-    /// ### Arguments
-    /// * `ctx` - Timestamp context used to generate a UUIDv7
-    /// * `name` - Name of this shard template
-    pub fn new<S1, S2, S3, C>(ctx: C, name: S1, machine: S2, memory: u64, kargs: S3) -> Self where S1: Into<String>, S2: Into<String>, S3: Into<String>, C: ClockSequence<Output = u16> {
-        let id = Uuid::new_v7(Timestamp::now(&ctx));
-        let name = name.into();
-        let machine = machine.into();
-        let kargs = kargs.into();
-
-        Self { id, name, machine, memory, kargs }
-    }
-
-    pub fn from_machine<S: Into<String>, C: ClockSequence<Output = u16>>(ctx: C, name: S,machine: MachineConfig) -> Self {
-        Self::new(ctx, name, machine.cpu, 512, "")
-    }
-
-    /// Returns the shard template with the provided name
-    pub fn get<S: AsRef<str>>(db: &Database, name: S) -> anyhow::Result<Self> {
-        let name = name.as_ref();
-
-        let template = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, machine, memory, kargs FROM shard_templates WHERE name = ?1")?;
-            let template = stmt.query_row(params![name], Self::from_row)?;
-            Ok(template)
-        })?;
-
-        Ok(template)
-    }
-
-    /// Retrieves all templates in the system
-    ///
-    /// ### Arguments
-    /// * `db` - Database connection
-    pub fn get_all(db: &Database) -> anyhow::Result<Vec<Self>> {
-        let templates = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, machine, memory, kargs FROM shard_templates")?;
-            let templates = stmt
-                .query_map(params![], Self::from_row)?
-                .filter_map(|r| r.ok())
-                .collect::<Vec<_>>();
-
-            Ok(templates)
-        })?;
-
-        Ok(templates)
-    }
-
-    /// Updates this shard template in the database
-    pub fn save(&self, db: &Database) -> anyhow::Result<()> {
-        db.transaction(|conn| {
-            conn.execute(
-                "INSERT INTO
-                    shard_templates (id, name, machine, memory, kargs)
-                 VALUES
-                    (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    machine = excluded.machine,
-                    memory = excluded.memory,
-                    kargs = excluded.kargs
-                ",
-                (&self.id, &self.name, &self.machine, self.memory, &self.kargs),
-            )?;
-
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    /// Returns the name of this shard template
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Decodes a SQLite row into a `ShardTemplate`
-    ///
-    /// ### Arguments
-    /// * `row` - Sqlite database row
-    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let id: Uuid = row.get(0)?;
-        let name: String = row.get(1)?;
-        let machine: String = row.get(2)?;
-        let memory: u64 = row.get(3)?;
-        let kargs: String = row.get(4)?;
-
-        Ok(Self { id, name, machine, memory, kargs })
-    }
-}
 
 impl Shard {
     /// Creates a new shard from the provided parameters
@@ -376,20 +265,6 @@ impl Shard {
             cid: row.get(3)?,
             state,
         })
-    }
-}
-
-impl AsTable for ShardTemplate {
-    fn header() -> &'static [&'static str] {
-        &["Name"]
-    }
-
-    fn update_col_width(&self, widths: &mut [usize]) {
-        widths[0] = std::cmp::max(widths[0], self.name.len());
-    }
-
-    fn as_table_row(&self, widths: &[usize]) {
-        self.print_field(&self.name, widths[0]);
     }
 }
 

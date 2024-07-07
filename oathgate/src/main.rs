@@ -9,7 +9,7 @@ pub(crate) mod process;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
-use cmd::{BridgeCommand, ImageCommand, KernelCommand, ShardCommand, TemplateCommand};
+use cmd::{BridgeCommand, ImageCommand, KernelCommand, ShardCommand};
 use console::style;
 use logger::SqliteSubscriber;
 use uuid::{NoContext, Uuid};
@@ -69,11 +69,13 @@ pub enum Command {
         command: ShardCommand,
     },
 
+    /*
     /// Manage shard templates
     Template {
         #[clap(subcommand)]
         command: TemplateCommand,
     },
+    */
 
     /// Print status of entire system
     Status,
@@ -240,16 +242,13 @@ fn main() -> anyhow::Result<()> {
             Command::Kernel { command } => command.execute(&state)?,
             Command::Image { command } => command.execute(&state)?,
             Command::Shard { command } => command.execute(&state)?,
-            Command::Template { command } => command.execute(&state)?,
+            //Command::Template { command } => command.execute(&state)?,
             Command::Status => {
                 println!("Bridges");
                 self::cmd::BridgeCommand::List.execute(&state)?;
 
                 println!("\nShards");
                 self::cmd::ShardCommand::List.execute(&state)?;
-
-                println!("\nTemplates");
-                self::cmd::TemplateCommand::List.execute(&state)?;
             }
         }
 
