@@ -1,7 +1,6 @@
 //! File format / configuration
 use std::{
-    fs::File,
-    path::{Path, PathBuf},
+    collections::HashMap, fs::File, io::Read, path::{Path, PathBuf}
 };
 
 use oathgate_net::types::MacAddress;
@@ -13,21 +12,32 @@ use crate::HypervisorError;
 pub struct MachineConfig {
     pub cpu: String,
     pub memory: String,
-    pub mac: Option<MacAddress>,
     pub kernel: KernelConfig,
     pub disk: DiskConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct KernelConfig {
-    path: PathBuf,
-    root: String,
+    /// Path on host system to kernel image
+    pub path: PathBuf,
+
+    /// Root partition/device to attempt to mount (i.e., /dev/vda or /dev/vda1)
+    pub root: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DiskConfig {
+    /// Path on host system to disk image
     pub path: PathBuf,
+
+    /// Format (i.e., raw,qcow) of this disk image
     pub format: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NetDevConfig {
+    /// MAC address of this network adapter
+    pub mac: Option<MacAddress>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -42,7 +52,26 @@ impl Config {
     /// * `path` - Path to file to load
     pub fn from_yaml<P: AsRef<Path>>(path: P) -> Result<Self, HypervisorError> {
         let fd = File::open(path)?;
-        let cfg: Config = serde_yaml::from_reader(fd)?;
+        Self::read_yaml(fd)
+    }
+
+    /// Loads a configuration file from reader
+    ///
+    /// ### Arguments
+    /// * `rdr` - Reader to read from and deserialize yaml
+    pub fn read_yaml<R: Read>(rdr: R) -> Result<Self, HypervisorError> {
+        let cfg: Config = serde_yaml::from_reader(rdr)?;
+        Ok(cfg)
+    }
+}
+
+impl MachineConfig {
+    /// Loads a configuration file from reader
+    ///
+    /// ### Arguments
+    /// * `rdr` - Reader to read from and deserialize yaml
+    pub fn read_yaml<R: Read>(rdr: R) -> Result<Self, HypervisorError> {
+        let cfg: MachineConfig = serde_yaml::from_reader(rdr)?;
         Ok(cfg)
     }
 }

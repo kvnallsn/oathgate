@@ -40,25 +40,13 @@ pub fn version_000(conn: &Connection) -> anyhow::Result<()> {
             format  TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS shard_template_disks (
-            id      BLOB PRIMARY KEY,
-            name    TEXT NOT NULL,
-            format  TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS shard_templates (
-            id      BLOB PRIMARY KEY,
-            name    TEXT NOT NULL,
-            machine TEXT NOT NULL,
-            memory  INTEGER NOT NULL,
-            kargs   TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS shards (
             id      BLOB PRIMARY KEY,
             name    TEXT NOT NULL,
             pid     INTEGER,
-            cid     INTEGER NOT NULL
+            cid     INTEGER NOT NULL,
+            cpu     TEXT NOT NULL,
+            memory  INTEGER NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS shard_devices (

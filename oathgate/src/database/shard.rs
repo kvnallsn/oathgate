@@ -29,6 +29,12 @@ pub struct Shard {
 
     /// Current state of the process (not saved in the database)
     state: ProcessState,
+
+    /// Type of CPU/processor of this shard
+    cpu: String,
+
+    /// Amount of RAM/memory, in megabytes
+    memory: u16,
 }
 
 
@@ -39,7 +45,7 @@ impl Shard {
     /// * `ctx` - Timestamp context used to generate a UUIDv7
     /// * `cid` - Context Id used with vhost-vsock
     /// * `name` - Name of this shard
-    pub fn new<S: Into<String>, C: ClockSequence<Output = u16>>(ctx: C, name: S) -> Self {
+    pub fn new<S1, S2, C>(ctx: C, name: S1, cpu: S2, memory: u16) -> Self where S1: Into<String>, S2: Into<String>, C: ClockSequence<Output = u16> {
         let mut rng = rand::thread_rng();
         let id = Uuid::new_v7(Timestamp::now(&ctx));
         let cid = rng.next_u32();
@@ -49,6 +55,8 @@ impl Shard {
             cid,
             name: name.into(),
             state: ProcessState::Stopped,
+            cpu: cpu.into(),
+            memory,
         }
     }
 
@@ -57,15 +65,17 @@ impl Shard {
         db.transaction(|conn| {
             conn.execute(
                 "INSERT INTO
-                    shards (id, name, pid, cid)
+                    shards (id, name, pid, cid, cpu, memory)
                  VALUES
-                    (?1, ?2, ?3, ?4)
+                    (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     pid = excluded.pid,
-                    cid = excluded.cid
+                    cid = excluded.cid,
+                    cpu = excluded.cpu,
+                    memory = excluded.memory
                 ",
-                (&self.id, &self.name, self.state.optional(), self.cid),
+                (&self.id, &self.name, self.state.optional(), self.cid, &self.cpu, self.memory),
             )?;
 
             Ok(())
@@ -109,7 +119,7 @@ impl Shard {
     /// * `name` - Name of the shard
     pub fn get(db: &Database, name: &str) -> anyhow::Result<Option<Shard>> {
         let shard = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, pid, cid FROM shards WHERE name = ?1")?;
+            let mut stmt = conn.prepare("SELECT id, name, pid, cid, cpu, memory FROM shards WHERE name = ?1")?;
 
             let shard = stmt.query_row(params![name], Self::from_row).optional()?;
 
@@ -125,7 +135,7 @@ impl Shard {
     /// * `db` - Reference to the database
     pub fn get_all(db: &Database) -> anyhow::Result<Vec<Shard>> {
         let shards = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, pid, cid FROM shards")?;
+            let mut stmt = conn.prepare("SELECT id, name, pid, cid, cpu, memory FROM shards")?;
 
             let shards = stmt
                 .query_map(params![], Self::from_row)?
@@ -263,6 +273,8 @@ impl Shard {
             id: row.get(0)?,
             name: row.get(1)?,
             cid: row.get(3)?,
+            cpu: row.get(4)?,
+            memory: row.get(5)?,
             state,
         })
     }

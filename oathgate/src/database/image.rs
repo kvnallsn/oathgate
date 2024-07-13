@@ -1,12 +1,12 @@
 //! Disk Image  Database Model
 
-use std::{fmt::Display, str::FromStr};
+use std::{fmt::Display, path::PathBuf, str::FromStr};
 
 use anyhow::anyhow;
 use rusqlite::{types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value, ValueRef}, Row, ToSql};
 use uuid::{ClockSequence, Timestamp, Uuid};
 
-use crate::cmd::AsTable;
+use crate::{cmd::AsTable, State};
 
 use super::Database;
 
@@ -115,6 +115,14 @@ impl DiskImage {
     /// Returns the id of this kernel as a hyphenated string
     pub fn id_str(&self) -> String {
         self.id.as_hyphenated().to_string()
+    }
+
+    /// Returns the path to this kernel on the host file system
+    ///
+    /// ### Arguments
+    /// * `state` - Application state
+    pub fn path(&self, state: &State) -> PathBuf {
+        state.image_dir().join(&self.hash).with_extension("img")
     }
 
     /// Parses a sqlite row to return an instance of this datatype

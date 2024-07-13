@@ -244,8 +244,14 @@ fn main() -> anyhow::Result<()> {
             Command::Shard { command } => command.execute(&state)?,
             //Command::Template { command } => command.execute(&state)?,
             Command::Status => {
-                println!("Bridges");
+                println!("Networks");
                 self::cmd::BridgeCommand::List.execute(&state)?;
+
+                println!("Images");
+                self::cmd::ImageCommand::List.execute(&state)?;
+
+                println!("Kernels");
+                self::cmd::KernelCommand::List.execute(&state)?;
 
                 println!("\nShards");
                 self::cmd::ShardCommand::List.execute(&state)?;

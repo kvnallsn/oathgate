@@ -39,7 +39,8 @@ impl VmHandle {
     pub fn new<P: AsRef<Path>>(socket: P, cid: u32, machine: MachineConfig) -> io::Result<Self> {
         let socket = socket.as_ref();
 
-        let mac = machine.mac.unwrap_or_else(|| MacAddress::generate());
+        //let mac = machine.mac.unwrap_or_else(|| MacAddress::generate());
+        let mac = MacAddress::generate();
 
         tracing::debug!("launching vm, mac = {mac}, cid = {cid:04x}");
 

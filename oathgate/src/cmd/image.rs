@@ -75,12 +75,11 @@ fn image_install(state: &State, image: PathBuf, name: Option<String>) -> anyhow:
 
     let image = DiskImage::new(state.ctx(), hash_id, &name, format);
 
-    let dst = state.image_dir().join(image.id_str()).with_extension("bin");
     let mut dst = File::options()
         .write(true)
         .create(true)
         .append(false)
-        .open(dst)?;
+        .open(image.path(state))?;
     std::io::copy(&mut src, &mut dst)?;
 
     image.save(state.db())?;

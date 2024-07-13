@@ -1,11 +1,11 @@
 //! Kernel Database Model
 
-use std::fmt::Display;
+use std::{fmt::Display, path::PathBuf};
 
 use rusqlite::Row;
 use uuid::{ClockSequence, Timestamp, Uuid};
 
-use crate::cmd::AsTable;
+use crate::{cmd::AsTable, State};
 
 use super::Database;
 
@@ -134,6 +134,14 @@ impl Kernel {
     /// NOTE: Only one kernel can be set as the default. This is enforced by a SQL trigger
     pub fn set_default(&mut self) {
         self.default = true;
+    }
+
+    /// Returns the path to this kernel on disk
+    ///
+    /// ### Arguments
+    /// * `state` - Application state
+    pub fn path(&self, state: &State) -> PathBuf {
+        state.kernel_dir().join(&self.hash).with_extension("bin")
     }
 
     /// Parses a sqlite row to return an instance of this datatype

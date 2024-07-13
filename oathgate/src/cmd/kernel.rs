@@ -92,7 +92,7 @@ pub fn kernel_install(
 
     let kernel = Kernel::new(state.ctx(), hash_id, &name, &version, default);
 
-    let dst = state.kernel_dir().join(kernel.id_str()).with_extension("bin");
+    let dst = kernel.path(state);
     let mut dst = File::options().write(true).create(true).append(false).open(dst)?;
     std::io::copy(&mut src, &mut dst)?;
 

@@ -2,6 +2,11 @@
 
 mod fabrial;
 
+use std::{
+    fs::{self, File},
+    path::Path,
+};
+
 use anyhow::{anyhow, Context};
 use clap::{Args, Subcommand};
 use oathgate_runner::{config::Config, hypervisor::Hypervisor};
@@ -113,6 +118,13 @@ fn get_shard(state: &State, name: &str) -> anyhow::Result<Shard> {
     Ok(Shard::get(state.db(), &name)?.ok_or_else(|| anyhow!("shard not found"))?)
 }
 
+/// Deploys a new shard
+///
+/// Copies the disk image and kernel to a new location and adds references to the relevant networks
+///
+/// ### Arguments
+/// * `state` - Application state
+/// * `opts` - Deploy cli options
 fn shard_deploy(state: &State, opts: DeployOpts) -> anyhow::Result<()> {
     let name = opts.name.unwrap_or_else(|| state.generate_name());
 
@@ -140,7 +152,13 @@ fn shard_deploy(state: &State, opts: DeployOpts) -> anyhow::Result<()> {
 
     let bar = super::spinner(format!("deploying shard {name}"));
 
-    // TODO: design database and config storage structure
+    let shard = Shard::new(state.ctx(), &name, &opts.cpu, opts.memory);
+
+    let sdir = shard.dir(state).join(&name);
+    shard.save(state.db())?;
+
+    copy_file(kernel.path(state), sdir.with_extension("bin"))?;
+    copy_file(image.path(state), sdir.with_extension("img"))?;
 
     bar.finish_with_message(format!("deployed shard {name}"));
 
@@ -248,5 +266,24 @@ fn attach_shard(state: &State, name: String, port: u32) -> anyhow::Result<()> {
 fn print_logs(state: &State, name: String, format: LogFormat) -> anyhow::Result<()> {
     let shard = get_shard(state, &name)?;
     super::print_logs(state, shard.id(), format)?;
+    Ok(())
+}
+
+/// Copies a file from one path to another
+///
+/// ### Arguments
+/// * `src` - Path to source file on disk
+/// * `dst` - Path to destination file on disk
+fn copy_file<S: AsRef<Path>, D: AsRef<Path>>(src: S, dst: D) -> anyhow::Result<()> {
+    let mut src = File::options().read(true).write(false).open(src)?;
+
+    let mut dst = File::options()
+        .read(false)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(dst)?;
+
+    std::io::copy(&mut src, &mut dst)?;
     Ok(())
 }
