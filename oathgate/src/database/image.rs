@@ -10,6 +10,25 @@ use crate::{cmd::AsTable, State};
 
 use super::Database;
 
+/// Macro to build a SQL select query
+macro_rules! select {
+    () => {
+        "SELECT
+           id AS image_id,
+           hash AS image_hash,
+           name AS image_name,
+           format AS image_format,
+           root AS image_root
+        FROM
+            images"
+    };
+
+    ($query:literal) => {
+        concat!(select!(), " ", $query)
+    };
+}
+
+#[derive(Debug)]
 pub struct DiskImage {
     /// Unique id representing a kernel
     pub id: Uuid,
@@ -22,8 +41,12 @@ pub struct DiskImage {
 
     /// Format of the disk image
     pub format: DiskFormat,
+
+    /// Root partition, or None if a raw image
+    pub root: Option<u8>,
 }
 
+#[derive(Debug)]
 pub enum DiskFormat {
     /// A raw (i.e., ext4) disk image with no partitions
     Raw,
@@ -39,7 +62,7 @@ impl DiskImage {
     /// * `ctx` - Timestamp context used to generate a UUIDv7
     /// * `name` - Name of this image
     /// * `version` - Version of this image
-    pub fn new<S1, S2, C>(ctx: C, hash: S1, name: S2, format: DiskFormat) -> Self
+    pub fn new<S1, S2, C>(ctx: C, hash: S1, name: S2, format: DiskFormat, root: Option<u8>) -> Self
     where
         S1: Into<String>,
         S2: Into<String>,
@@ -49,7 +72,7 @@ impl DiskImage {
         let hash = hash.into();
         let name = name.into();
 
-        Self { id, hash, name, format }
+        Self { id, hash, name, format, root }
     }
 
     /// Retrieves a specific disk image from the database
@@ -60,7 +83,7 @@ impl DiskImage {
     pub fn get<S: AsRef<str>>(db: &Database, name: S) -> anyhow::Result<Self> {
         let name = name.as_ref();
         let image = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, hash, name, format FROM images WHERE name = ?1")?;
+            let mut stmt = conn.prepare(select!("WHERE name = ?1"))?;
             let image = stmt
                 .query_row([name], Self::from_row)?;
 
@@ -76,7 +99,7 @@ impl DiskImage {
     /// * `db` - Database reference
     pub fn get_all(db: &Database) -> anyhow::Result<Vec<Self>> {
         let images = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, hash, name, format FROM images")?;
+            let mut stmt = conn.prepare(select!())?;
             let images = stmt
                 .query_map([], Self::from_row)?
                 .into_iter()
@@ -98,13 +121,14 @@ impl DiskImage {
         db.transaction(|conn| {
             conn.execute(
                 "
-                INSERT INTO images (id, hash, name, format) VALUES (?1, ?2, ?3, ?4)
+                INSERT INTO images (id, hash, name, format, root) VALUES (?1, ?2, ?3, ?4, ?5)
                 ON CONFLICT(id) DO UPDATE SET
                     hash = excluded.hash,
                     name = excluded.name,
-                    format = excluded.format
+                    format = excluded.format,
+                    root = excluded.root
             ",
-                (&self.id, &self.hash, &self.name, self.format.to_string()),
+                (&self.id, &self.hash, &self.name, self.format.to_string(), self.root),
             )?;
             Ok(())
         })?;
@@ -129,33 +153,39 @@ impl DiskImage {
     ///
     /// ### Arguments
     /// * `row` - SQLite database row
-    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let id: Uuid = row.get(0)?;
-        let hash: String = row.get(1)?;
-        let name: String = row.get(2)?;
-        let format: DiskFormat = row.get(3)?;
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let id: Uuid = row.get("image_id")?;
+        let hash: String = row.get("image_hash")?;
+        let name: String = row.get("image_name")?;
+        let format: DiskFormat = row.get("image_format")?;
+        let root: Option<u8> = row.get("image_root")?;
 
-        Ok(Self { id, hash, name, format })
+        Ok(Self { id, hash, name, format, root })
     }
 }
 
 impl AsTable for DiskImage {
     fn header() -> &'static [&'static str] {
-        &["Hash", "Name", "Format"]
+        &["Hash", "Name", "Format", "Root Partition"]
     }
 
     fn update_col_width(&self, widths: &mut [usize]) {
         let f = self.format.to_string();
+        let p = self.root.map(|id| id.to_string()).unwrap_or_else(|| String::from("None"));
 
         widths[0] = std::cmp::max(widths[0], self.hash.len());
         widths[1] = std::cmp::max(widths[1], self.name.len());
         widths[2] = std::cmp::max(widths[2], f.len());
+        widths[3] = std::cmp::max(widths[3], p.len());
     }
 
     fn as_table_row(&self, widths: &[usize]) {
+        let p = self.root.map(|id| id.to_string()).unwrap_or_else(|| String::from("None"));
+
         self.print_field(&self.hash, widths[0]);
         self.print_field(&self.name, widths[1]);
         self.print_field(&self.format, widths[2]);
+        self.print_field(&p, widths[3]);
     }
 }
 

@@ -1242,6 +1242,7 @@ dependencies = [
  "names",
  "nix 0.29.0",
  "oathgate-bridge",
+ "oathgate-net",
  "oathgate-runner",
  "parking_lot",
  "rand",

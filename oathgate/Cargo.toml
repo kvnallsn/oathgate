@@ -18,6 +18,7 @@ mio = { workspace = true }
 names = { version = "0.14.0", default-features = false }
 nix = { workspace = true }
 oathgate-bridge = { path = "../oathgate-bridge" }
+oathgate-net = { path = "../oathgate-net" }
 oathgate-runner = { path = "../oathgate-runner" }
 parking_lot = { workspace = true }
 rand.workspace = true

@@ -9,6 +9,25 @@ use crate::{cmd::AsTable, State};
 
 use super::Database;
 
+/// Macro to build a SQL select query
+macro_rules! select {
+    () => {
+        "SELECT
+           id AS kernel_id,
+           hash AS kernel_hash,
+           name AS kernel_name,
+           version AS kernel_version,
+           is_default AS kernel_default
+        FROM
+            kernels"
+    };
+
+    ($query:literal) => {
+        concat!(select!(), " ", $query)
+    };
+}
+
+#[derive(Debug)]
 pub struct Kernel {
     /// Unique id representing a kernel
     pub id: Uuid,
@@ -51,13 +70,13 @@ impl Kernel {
 
     /// Retrieves a specific kernel from the database
     ///
-    /// ### Arguments
+    /// ### Arguments;
     /// * `db` - Database connection
     /// * `name` - Name of the kernel to fetch from the database
     pub fn get<S: AsRef<str>>(db: &Database, name: S) -> anyhow::Result<Self> {
         let name = name.as_ref();
         let kernel = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, hash, name, version, is_default FROM kernels WHERE name = ?1")?;
+            let mut stmt = conn.prepare(select!("WHERE name = ?1"))?;
             let kernel = stmt
                 .query_row([name], Self::from_row)?;
 
@@ -74,7 +93,7 @@ impl Kernel {
     /// * `db` - Database connection
     pub fn get_default(db: &Database) -> anyhow::Result<Self> {
         let kernel = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, hash, name, version, is_default FROM kernels WHERE is_default = 1")?;
+            let mut stmt = conn.prepare(select!("WHERE is_default = 1"))?;
             let kernel = stmt
                 .query_row([], Self::from_row)?;
 
@@ -90,7 +109,7 @@ impl Kernel {
     /// * `db` - Database reference
     pub fn get_all(db: &Database) -> anyhow::Result<Vec<Self>> {
         let kernels = db.transaction(|conn| {
-            let mut stmt = conn.prepare("SELECT id, hash, name, version, is_default FROM kernels")?;
+            let mut stmt = conn.prepare(select!())?;
             let kernels = stmt
                 .query_map([], Self::from_row)?
                 .into_iter()
@@ -148,12 +167,12 @@ impl Kernel {
     ///
     /// ### Arguments
     /// * `row` - SQLite database row
-    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let id: Uuid = row.get(0)?;
-        let hash: String = row.get(1)?;
-        let name: String = row.get(2)?;
-        let version: String = row.get(3)?;
-        let default: bool = row.get(4)?;
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let id: Uuid = row.get("kernel_id")?;
+        let hash: String = row.get("kernel_hash")?;
+        let name: String = row.get("kernel_name")?;
+        let version: String = row.get("kernel_version")?;
+        let default: bool = row.get("kernel_default")?;
 
         Ok(Self { id, hash, name, version, default })
     }

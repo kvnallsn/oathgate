@@ -12,6 +12,8 @@ use clap::{Parser, Subcommand};
 use cmd::{BridgeCommand, ImageCommand, KernelCommand, ShardCommand};
 use console::style;
 use logger::SqliteSubscriber;
+use parking_lot::Mutex;
+use rand::{rngs::ThreadRng, Rng};
 use uuid::{NoContext, Uuid};
 
 use self::database::Database;
@@ -94,6 +96,12 @@ pub struct State {
     /// Context used to generate unique ids
     ctx: NoContext,
 
+    /// Random number generator
+    rng: Mutex<ThreadRng>,
+
+    /// Random name generator
+    name_gen: Mutex<names::Generator<'static>>,
+
     /// Maximum level to log at
     max_log_level: tracing::Level,
 }
@@ -137,6 +145,8 @@ impl State {
             database: db,
             no_confirm: opts.yes_dont_ask_again,
             ctx: NoContext::default(),
+            rng: Mutex::new(rand::thread_rng()),
+            name_gen: Mutex::new(names::Generator::default()),
             max_log_level,
         })
     }
@@ -166,8 +176,17 @@ impl State {
 
     /// Generates a new name to identify a device/shard/etc.
     pub fn generate_name(&self) -> String {
-        let mut names = names::Generator::default();
-        names.next().unwrap()
+        self.name_gen.lock().next().unwrap()
+    }
+
+    /// Generates a new UUIDv7
+    pub fn generate_id(&self) -> Uuid {
+        Uuid::now_v7()
+    }
+
+    /// Generates a new number inbetween 20,000 and 30,000 to use as a context id
+    pub fn generate_cid(&self) -> u32 {
+        self.rng.lock().gen_range(20_000..30_000)
     }
 
     pub fn get_mime<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<String> {

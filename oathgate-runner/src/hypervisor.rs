@@ -61,12 +61,12 @@ impl Hypervisor {
     /// ### Arguments
     /// * `port` - Port to bind on vhost socket
     pub fn new<P: AsRef<Path>, S: Into<String>>(
-        network: &[P],
+        networks: &[P],
         name: S,
         cid: u32,
         config: MachineConfig,
     ) -> Result<Self, HypervisorError> {
-        let vm = VmHandle::new(&network[0], cid, config)?;
+        let vm = VmHandle::new(networks, cid, config)?;
 
         tracing::debug!(
             "binding hypervisor socket (cid = {}, port = {})",

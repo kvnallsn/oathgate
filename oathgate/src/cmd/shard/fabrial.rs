@@ -18,38 +18,38 @@ use nix::{
 
 macro_rules! encode {
     ($bytes:expr, $b0: expr) => {{
-        $bytes[3] = $b0;
+        $bytes[5] = $b0;
         1
     }};
     ($bytes:expr, $b0: expr, $b1:expr) => {{
-        $bytes[3] = $b0;
-        $bytes[4] = $b1;
+        $bytes[5] = $b0;
+        $bytes[6] = $b1;
         2
     }};
     ($bytes:expr, $b0: expr, $b1:expr, $b2:expr) => {{
-        $bytes[3] = $b0;
-        $bytes[4] = $b1;
-        $bytes[5] = $b2;
+        $bytes[5] = $b0;
+        $bytes[6] = $b1;
+        $bytes[7] = $b2;
         3
     }};
     ($bytes:expr, $b0: expr, $b1:expr, $b2:expr, $b3:expr) => {{
-        $bytes[3] = $b0;
-        $bytes[4] = $b1;
-        $bytes[5] = $b2;
-        $bytes[6] = $b3;
+        $bytes[5] = $b0;
+        $bytes[6] = $b1;
+        $bytes[7] = $b2;
+        $bytes[8] = $b3;
         4
     }};
     ($bytes:expr, $b0: expr, $b1:expr, $b2:expr, $b3:expr, $b4:expr) => {{
-        $bytes[3] = $b0;
-        $bytes[4] = $b1;
-        $bytes[5] = $b2;
-        $bytes[6] = $b3;
-        $bytes[7] = $b4;
+        $bytes[5] = $b0;
+        $bytes[6] = $b1;
+        $bytes[7] = $b2;
+        $bytes[8] = $b3;
+        $bytes[9] = $b4;
         5
     }};
 }
 
-fn connect(cid: u32, port: u32) -> io::Result<OwnedFd> {
+fn connect(cid: u32, port: u32) -> anyhow::Result<OwnedFd> {
     let addr = VsockAddr::new(cid, port);
     let sock = nix::sys::socket::socket(
         AddressFamily::Vsock,
@@ -57,7 +57,9 @@ fn connect(cid: u32, port: u32) -> io::Result<OwnedFd> {
         SockFlag::empty(),
         None,
     )?;
-    nix::sys::socket::connect(sock.as_raw_fd(), &addr)?;
+    nix::sys::socket::connect(sock.as_raw_fd(), &addr)
+        .context("unable to connect to vm")?;
+
     Ok(sock)
 }
 
@@ -123,6 +125,8 @@ fn resize_pty(sock: RawFd, rows: u16, cols: u16, bytes: &mut [u8]) -> anyhow::Re
     bytes[1..3].copy_from_slice(&rows.to_le_bytes());
     bytes[3..5].copy_from_slice(&cols.to_le_bytes());
 
+    println!(">> resize pty: {:02x?}", &bytes[0..5]);
+
     socket::send(sock, &bytes[0..5], MsgFlags::MSG_DONTWAIT)?;
     Ok(())
 }
@@ -133,7 +137,7 @@ fn run_ui(sock: RawFd) -> anyhow::Result<()> {
     const MODIFIERS_CTRL: KeyModifiers = KeyModifiers::CONTROL;
     const MODIFIERS_SHIFT: KeyModifiers = KeyModifiers::SHIFT;
 
-    let mut bytes: [u8; 8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    let mut bytes: [u8; 10] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
     // get the terminal size
     if let Err(_error) = terminal::size()
@@ -151,7 +155,7 @@ fn run_ui(sock: RawFd) -> anyhow::Result<()> {
             Event::Key(ev) => {
                 let sz = match ev.modifiers {
                     MODIFIERS_EMPTY => match ev.code {
-                        KeyCode::Char(ch) => ch.encode_utf8(&mut bytes[3..]).len(),
+                        KeyCode::Char(ch) => ch.encode_utf8(&mut bytes[5..]).len(),
                         KeyCode::Backspace => encode!(bytes, 0x08),
                         KeyCode::Tab => encode!(bytes, 0x09),
                         KeyCode::Enter => encode!(bytes, 0x0A),
@@ -193,8 +197,10 @@ fn run_ui(sock: RawFd) -> anyhow::Result<()> {
                     bytes[0] = 0x01;
                     bytes[1] = szb[0];
                     bytes[2] = szb[1];
+                    bytes[3] = szb[2];
+                    bytes[4] = szb[4];
 
-                    let _sz = socket::send(sock, &bytes[0..(sz + 3)], MsgFlags::MSG_DONTWAIT)?;
+                    let _sz = socket::send(sock, &bytes[0..(sz + 5)], MsgFlags::MSG_DONTWAIT)?;
                 }
             }
             Event::Resize(cols, rows) => resize_pty(sock, rows, cols, &mut bytes)?,

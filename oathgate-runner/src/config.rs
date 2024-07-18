@@ -1,6 +1,6 @@
 //! File format / configuration
 use std::{
-    collections::HashMap, fs::File, io::Read, path::{Path, PathBuf}
+    fs::File, io::Read, path::{Path, PathBuf}
 };
 
 use oathgate_net::types::MacAddress;
@@ -66,6 +66,20 @@ impl Config {
 }
 
 impl MachineConfig {
+    /// Creates a new machine configuration
+    ///
+    /// ### Arguments
+    /// * `cpu` - Type of CPU to emulate
+    /// * `memory` - Amount of memory to allocate virtual machine
+    /// * `kernel` - Kernel configuration
+    /// * `disk` - Disk configuration
+    pub fn new<C: Into<String>, M: Into<String>>(cpu: C, memory: M, kernel: KernelConfig, disk: DiskConfig) -> Self {
+        let cpu = cpu.into();
+        let memory = memory.into();
+
+        Self { cpu, memory, kernel, disk }
+    }
+
     /// Loads a configuration file from reader
     ///
     /// ### Arguments
@@ -77,6 +91,18 @@ impl MachineConfig {
 }
 
 impl KernelConfig {
+    /// Creates a new kernel configuration for an on-disk kernel image
+    ///
+    /// ### Arguments
+    /// * `path` - Path to kernel image on disk
+    /// * `root` - Root device to boot (e.g., /dev/vda, /dev/vda1, etc.)
+    pub fn new<P: Into<PathBuf>, R: Into<String>>(path: P, root: R) -> Self {
+        let path = path.into();
+        let root = root.into();
+
+        Self { path, root }
+    }
+
     pub fn path(&self) -> &Path {
         self.path.as_path()
     }
@@ -89,6 +115,16 @@ impl KernelConfig {
 }
 
 impl DiskConfig {
+    /// Creates a new disk configuration
+    ///
+    /// ### Arguments
+    /// * `path` - Path to the disk
+    pub fn new<P: Into<PathBuf>, F: Into<String>>(path: P, format: F) -> Self {
+        let path = path.into(); 
+
+        Self { path, format: Some(format.into())}
+    }
+
     pub fn as_qemu_drive(&self, id: &str) -> String {
         let file = self.path.display();
 

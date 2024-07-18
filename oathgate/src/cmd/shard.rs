@@ -2,17 +2,18 @@
 
 mod fabrial;
 
-use std::{
-    fs::{self, File},
-    path::Path,
-};
-
 use anyhow::{anyhow, Context};
 use clap::{Args, Subcommand};
-use oathgate_runner::{config::Config, hypervisor::Hypervisor};
+use oathgate_net::types::MacAddress;
+use oathgate_runner::hypervisor::Hypervisor;
 
 use crate::{
-    database::{image::DiskImage, kernel::Kernel, shard::Shard, Device},
+    database::{
+        image::DiskImage,
+        kernel::Kernel,
+        shard::{Shard, ShardBuilder},
+        Device,
+    },
     fork::Forker,
     State,
 };
@@ -102,13 +103,13 @@ impl ShardCommand {
         match self {
             Self::Deploy { opts } => shard_deploy(state, opts)?,
             Self::Run { name } => {
-                run_shard(state, name)?;
+                shard_run(state, name)?;
             }
             Self::List => list_shards(state)?,
             Self::Logs { name, format } => print_logs(state, name, format)?,
             Self::Attach { name, port } => attach_shard(state, name, port)?,
             Self::Stop { name } => stop_shard(state, name)?,
-            Self::Delete { name } => delete_shard(state, name)?,
+            Self::Delete { name } => shard_delete(state, name)?,
         }
         Ok(())
     }
@@ -152,48 +153,44 @@ fn shard_deploy(state: &State, opts: DeployOpts) -> anyhow::Result<()> {
 
     let bar = super::spinner(format!("deploying shard {name}"));
 
-    let shard = Shard::new(state.ctx(), &name, &opts.cpu, opts.memory);
+    //let shard = Shard::new(state.ctx(), &name, &opts.cpu, opts.memory);
 
-    let sdir = shard.dir(state).join(&name);
+    let mut builder = ShardBuilder::default();
+
+    builder
+        .name(&name)
+        .cpu(&opts.cpu)
+        .memory(opts.memory)
+        .kernel(kernel)
+        .boot_disk(image);
+
+    for dev in devices {
+        builder.add_network(dev, MacAddress::generate());
+    }
+
+    let shard = builder.build(state)?;
     shard.save(state.db())?;
-
-    copy_file(kernel.path(state), sdir.with_extension("bin"))?;
-    copy_file(image.path(state), sdir.with_extension("img"))?;
+    shard.deploy(state)?;
 
     bar.finish_with_message(format!("deployed shard {name}"));
 
     Ok(())
 }
 
-fn run_shard(state: &State, name: String) -> anyhow::Result<()> {
+/// Runs a shard, spawning a new (daemonized) process
+///
+/// ### Arguments
+/// * `state` - Application state
+/// * `name` - Name of machine to start
+fn shard_run(state: &State, name: String) -> anyhow::Result<()> {
     let mut shard = get_shard(state, &name)?;
     let bar = super::spinner(format!("starting shard {name}"));
 
-    let networks = shard.networks(state.db())?;
+    let cfg = shard.generate_machine_config(state)?;
 
-    let mut stopped = Vec::new();
-    let sockets = networks
-        .into_iter()
-        .filter_map(|net| match net.is_running() {
-            true => Some(net.uds(state)),
-            false => {
-                stopped.push(net.name().to_owned());
-                None
-            }
-        })
-        .collect::<Vec<_>>();
+    println!("{cfg:#?}");
 
-    if !stopped.is_empty() {
-        return Err(anyhow!(
-            "all networks must be running. stopped networks: {}",
-            stopped.join(", ")
-        ));
-    }
-
-    let cfg = Config::from_yaml(shard.config_file_path(state))
-        .context("unable to parse configuration file")?;
-
-    let mut hv = Hypervisor::new(&sockets, shard.name(), shard.cid(), cfg.machine)
+    let mut hv = Hypervisor::new::<&str, &str>(&[], shard.name(), shard.cid(), cfg)
         .context("unable to create hypervisor")?;
 
     let logger = state.subscriber(shard.id())?;
@@ -207,8 +204,7 @@ fn run_shard(state: &State, name: String) -> anyhow::Result<()> {
     shard.set_running(pid.as_raw());
     shard.save(state.db())?;
 
-    bar.finish_with_message(format!("started {name} with pid {pid}", pid = 0));
-
+    bar.finish_with_message(format!("started {name} with pid {pid}"));
     Ok(())
 }
 
@@ -234,7 +230,7 @@ fn stop_shard(state: &State, name: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn delete_shard(state: &State, name: String) -> anyhow::Result<()> {
+fn shard_delete(state: &State, name: String) -> anyhow::Result<()> {
     let shard = get_shard(state, &name)?;
 
     if shard.is_running() {
@@ -266,24 +262,5 @@ fn attach_shard(state: &State, name: String, port: u32) -> anyhow::Result<()> {
 fn print_logs(state: &State, name: String, format: LogFormat) -> anyhow::Result<()> {
     let shard = get_shard(state, &name)?;
     super::print_logs(state, shard.id(), format)?;
-    Ok(())
-}
-
-/// Copies a file from one path to another
-///
-/// ### Arguments
-/// * `src` - Path to source file on disk
-/// * `dst` - Path to destination file on disk
-fn copy_file<S: AsRef<Path>, D: AsRef<Path>>(src: S, dst: D) -> anyhow::Result<()> {
-    let mut src = File::options().read(true).write(false).open(src)?;
-
-    let mut dst = File::options()
-        .read(false)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(dst)?;
-
-    std::io::copy(&mut src, &mut dst)?;
     Ok(())
 }

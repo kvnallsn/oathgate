@@ -33,16 +33,11 @@ impl VmHandle {
     /// Creates a new handle to virtual machine
     ///
     /// ### Arguments
-    /// * `socket` - Path to network bridge socket
+    /// * `sockets` - Path to network bridge socket
     /// * `cid` - Context id of this virtual machine
     /// * `machine` - Machine configuration
-    pub fn new<P: AsRef<Path>>(socket: P, cid: u32, machine: MachineConfig) -> io::Result<Self> {
-        let socket = socket.as_ref();
-
-        //let mac = machine.mac.unwrap_or_else(|| MacAddress::generate());
-        let mac = MacAddress::generate();
-
-        tracing::debug!("launching vm, mac = {mac}, cid = {cid:04x}");
+    pub fn new<P: AsRef<Path>>(sockets: &[P], cid: u32, machine: MachineConfig) -> io::Result<Self> {
+        tracing::debug!("launching vm, cid = {cid:04x}");
 
         let mut cmd = cmd!(
             "qemu-system-x86_64",
@@ -73,15 +68,21 @@ impl VmHandle {
             "node,memdev=mem",
             "-drive",
             machine.disk.as_qemu_drive("root"),
-            "-chardev",
-            format!("socket,id=chr0,path={}", socket.display()),
-            "-netdev",
-            "type=vhost-user,id=net0,chardev=chr0,queues=1",
-            "-device",
-            format!("virtio-net-pci,netdev=net0,mac={mac}"),
             "-device",
             format!("vhost-vsock-pci,guest-cid={cid}")
         );
+
+        for socket in sockets {
+            let socket = socket.as_ref(); 
+            let mac = MacAddress::generate();
+
+            cmd.arg("-chardev");
+            cmd.arg(format!("socket,id=chr0,path={}", socket.display()));
+            cmd.arg("-netdev");
+            cmd.arg("type=vhost-user,id=net0,chardev=chr0,queues=1");
+            cmd.arg("-device");
+            cmd.arg(format!("virtio-net-pci,netdev=net0,mac={mac}"));
+        }
 
         cmd
             .stdin(Stdio::piped())
@@ -93,6 +94,7 @@ impl VmHandle {
 
     /// Spawns a new vm, returning the child process information
     pub fn start(&mut self) -> std::io::Result<Child> {
+        tracing::debug!(cmd = ?self.command, "starting vm");
         self.command.spawn()
     }
 

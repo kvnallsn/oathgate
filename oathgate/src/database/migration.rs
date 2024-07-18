@@ -37,23 +37,26 @@ pub fn version_000(conn: &Connection) -> anyhow::Result<()> {
             id      BLOB PRIMARY KEY,
             hash    TEXT NOT NULL UNIQUE,
             name    TEXT NOT NULL,
-            format  TEXT NOT NULL
+            format  TEXT NOT NULL,
+            root    INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS shards (
-            id      BLOB PRIMARY KEY,
-            name    TEXT NOT NULL,
-            pid     INTEGER,
-            cid     INTEGER NOT NULL,
-            cpu     TEXT NOT NULL,
-            memory  INTEGER NOT NULL
+            id          BLOB PRIMARY KEY,
+            name        TEXT NOT NULL,
+            pid         INTEGER,
+            cid         INTEGER NOT NULL,
+            cpu         TEXT NOT NULL,
+            memory      INTEGER NOT NULL,
+            kernel      BLOB NOT NULL,
+            bootdisk    BLOB NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS shard_devices (
-            device_id   BLOB REFERENCES devices(id),
+        CREATE TABLE IF NOT EXISTS shard_networks (
+            network_id  BLOB REFERENCES devices(id),
             shard_id    BLOB REFERENCES shards(id),
-            interface   TEXT NOT NULL,
-            PRIMARY KEY (device_id, shard_id)
+            mac         TEXT NOT NULL,
+            PRIMARY KEY (network_id, shard_id)
         );
 
         CREATE TRIGGER IF NOT EXISTS enforce_kernel_default_insert

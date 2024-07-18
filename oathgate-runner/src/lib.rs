@@ -5,7 +5,7 @@ use std::borrow::Cow;
 pub mod config;
 pub mod hypervisor;
 pub mod pty;
-pub mod tui;
+//pub mod tui;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HypervisorError {
@@ -19,6 +19,5 @@ pub enum HypervisorError {
     Yaml(#[from] serde_yaml::Error),
 
     #[error("{0}")]
-    Other(Cow<'static, str>)
+    Other(Cow<'static, str>),
 }
-

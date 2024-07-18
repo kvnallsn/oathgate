@@ -19,6 +19,10 @@ pub enum ImageCommand {
         /// Name of this disk image
         #[clap(short, long)]
         name: Option<String>,
+
+        /// Id of root partition, or omitted if raw image
+        #[clap(short, long)]
+        root: Option<u8>,
     },
 
     /// List installed/available disk images
@@ -33,7 +37,7 @@ impl ImageCommand {
     /// * `state` - Application state
     pub fn execute(self, state: &State) -> anyhow::Result<()> {
         match self {
-            Self::Install { image, name } => image_install(state, image, name)?,
+            Self::Install { image, name, root } => image_install(state, image, name, root)?,
             Self::List => image_list(state)?,
         }
 
@@ -51,7 +55,8 @@ impl ImageCommand {
 /// * `kernel` - Path to kernel to install on disk
 /// * `version` - Kernel version (i.e., 6.9.0-32)
 /// * `name` - Name to refer to this kernel by (or omitted to auto-generate)
-fn image_install(state: &State, image: PathBuf, name: Option<String>) -> anyhow::Result<()> {
+/// * `root` - Id of the root partition
+fn image_install(state: &State, image: PathBuf, name: Option<String>, root: Option<u8>) -> anyhow::Result<()> {
     let name = name.unwrap_or_else(|| state.generate_name());
 
     let mime = state.get_mime(&image)?;
@@ -73,7 +78,7 @@ fn image_install(state: &State, image: PathBuf, name: Option<String>) -> anyhow:
     bar.finish_with_message(format!("hashed image '{name}'"));
     let bar = super::spinner(format!("installing image '{name}'"));
 
-    let image = DiskImage::new(state.ctx(), hash_id, &name, format);
+    let image = DiskImage::new(state.ctx(), hash_id, &name, format, root);
 
     let mut dst = File::options()
         .write(true)
